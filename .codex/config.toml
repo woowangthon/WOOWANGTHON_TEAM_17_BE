@@ -1,0 +1,9 @@
+# 모델·동시성 기본값. 세션에서 사용자가 선택한 root 모델을 바꾸지 않는다.
+model = "gpt-6-astra"
+model_reasoning_effort = "medium"
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 2
+default_subagent_model = "gpt-6-luna"
+default_subagent_reasoning_effort = "high"
