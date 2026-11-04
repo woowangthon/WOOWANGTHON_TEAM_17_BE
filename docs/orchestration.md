@@ -5,20 +5,22 @@
 | 역할 | 모델 | 책임 |
 | --- | --- | --- |
 | root | 현재 선택된 세션 모델 | 요구사항·조정·통합·최종 검사·GitHub 전달 |
-| planner | Astra medium | 비단순 기능·동작·설계가 필요한 버그의 선행 계획 |
+| planner | GPT-6.1 Sol high | 비단순 기능·동작·설계가 필요한 버그의 선행 계획 |
 | explorer | Luna high | 관련 코드·계약·경계의 읽기 전용 조사 |
 | worker | Luna high | 합의된 범위와 파일의 구현 |
 | tester | Luna high | 실제 설정된 검사와 전용 테스트 환경의 검증 |
-| reviewer | Astra medium | 독립적인 보안·계약·회귀 검토 |
+| reviewer | GPT-6.1 Sol high | 독립적인 보안·계약·회귀 검토 |
 
 `.codex/config.toml`은 프로젝트 기본값이며 현재 root 세션 모델을 전환하지 않는다. 역할별 모델은 각 `.codex/agents/*.toml`에 적는다. 동시 하위 에이전트는 최대 2개다. 사용자가 지정한 모델·범위가 우선한다.
+
+planner/reviewer 기본값은 `gpt-6.1-sol`, `model_reasoning_effort = "high"`다. root 기본 설정과 Luna 역할은 이번 역할 모델 변경 대상이 아니다. 모델 ID·high 지원은 [공식 모델 문서](https://developers.openai.com/api/docs/models/gpt-6.1-sol)에서 확인한다. [OpenAI 모델 안내](https://learn.chatgpt.com/docs/models)는 Sol의 낮은 비용을 설명하지만, 이 프로젝트에서의 품질 동일성·한도 절약률은 실측한 것으로 간주하지 않는다.
 
 ## 위임 흐름
 
 - 단순 설명·조사는 root가 직접 하거나 explorer에게 읽기 전용으로 맡길 수 있다.
-- 비단순 기능, 실제 동작 변경, 설계가 필요한 버그는 root의 모델과 무관하게 별도 Astra medium planner를 먼저 실행한다. 계획을 확인한 뒤에만 구현을 배정한다.
+- 비단순 기능, 실제 동작 변경, 설계가 필요한 버그는 root의 모델과 무관하게 별도 GPT-6.1 Sol high planner를 먼저 실행한다. 계획을 확인한 뒤에만 구현을 배정한다.
 - root가 Notion 메인 목차에서 기존 기능 페이지를 찾고 공통 규칙·해당 기능 명세와 `docs/database-schema.md` 및 관련 DDL을 읽어 planner에게 전달한다. planner는 API→컬럼/JSON/관계 매핑, FK·CHECK·생성 컬럼·동시성 영향, 구현 파일·순서·인수 기준·검증을 계획한다. 규격 누락·DB 충돌은 root를 통해 확인하며 새 규격이나 DB 구조를 임의로 만들지 않는다.
-- planner 역할 호출을 지원하지 않으면 planner TOML의 지침과 Astra medium 모델을 명시한 대체 하위 에이전트를 실행하고 그 경로를 보고한다. 두 실행 방식 모두 불가능하면 이유를 보고한다. 독립된 읽기 전용 탐색은 가능하지만 설계에 의존하는 구현은 시작하지 않는다. 다른 모델을 조용히 대신 쓰지 않는다.
+- planner/reviewer 역할 호출이 미지원이거나 이전 모델에 고정되어 있으면 해당 TOML의 지침과 `gpt-6.1-sol`·`high`를 명시한 별도 하위 에이전트로 실행하고 그 경로를 보고한다. 두 실행 방식 모두 불가능하면 이유와 미실행을 보고한다. 독립된 읽기 전용 탐색은 가능하지만 planner 계획에 의존하는 구현은 시작하지 않고, reviewer 검토를 수행했다고 주장하지 않는다. 다른 모델을 조용히 대신 쓰지 않는다.
 - root는 계획을 검토하고 파일 소유권을 배정한다. worker는 구현, tester는 범위가 정해진 검사, reviewer는 독립 검토를 맡는다. 단계가 의존하면 순차 실행하고 파일이 독립된 경우만 병렬화한다.
 - 하위 역할은 재위임하거나 PR 절차를 반복하지 않는다. root만 오케스트레이션·통합·최종 검사·GitHub 작업을 맡는다. worker는 별도 지시 없이 커밋·push하지 않는다.
 
