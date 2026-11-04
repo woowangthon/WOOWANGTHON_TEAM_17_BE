@@ -7,6 +7,8 @@ description: Independently review backend API, database, authorization, or runti
 
 Read the assigned diff and only the relevant backend contract, source, and repository docs. Resolve paths from the repository root. Review the requested scope and established conventions; do not assume a tool, framework detail, endpoint, or contract that the repository has not established.
 
+For API work, root supplies both the applicable Notion common rules and the existing feature child-page specification found through the main index. Check both sources and their stated applicability. Flag index-only assumptions, BE specification-body edits, pages created per commit/PR, or a whole feature marked complete when some APIs or required verification remain. BE status reporting belongs only in that feature's implementation status/BE PR/actual verification fields and corresponding index row; FE owns specification text.
+
 For persistence changes, read `docs/database-schema.md` and the affected table DDL in `docs/database-schema-reference.md`. Check API/model mappings against the supplied existing schema, especially composite trip/plan/version boundaries, generated fields, nullable values, checks, unique request keys and revision/transaction behavior. Distinguish database-enforced constraints from application authorization/JSON validation. Flag invented columns, silent schema rewrites, leaked internal fields, or claims of live DB validation based only on reading the dump.
 
 Prioritize actionable defects in:
