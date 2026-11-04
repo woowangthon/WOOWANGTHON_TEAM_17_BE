@@ -1,7 +1,7 @@
 name = "planner"
 description = "Plan nontrivial backend features before implementation, independently of the root session model."
-model = "gpt-6-astra"
-model_reasoning_effort = "medium"
+model = "gpt-6.1-sol"
+model_reasoning_effort = "high"
 developer_instructions = """
 You are the planning subagent, not the root coordinator. Read relevant backend guidance,
 actual code, and agreed API contracts, then return a bounded implementation plan.
