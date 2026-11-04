@@ -9,12 +9,15 @@
 ## 기준 문서
 - 에이전트 작업 분리·모델: `docs/orchestration.md`
 - API 계약·미합의 항목: `docs/api-contract.md`
+- DB 구현 기준: `docs/database-schema.md`; 관련 테이블의 정확한 DDL: `docs/database-schema-reference.md`
 - GitHub 작업·완료 기준: `docs/github-workflow.md`
 - clone·개인 계정 연결·첫 작업: `docs/codex-onboarding.md`
 - 실제 README와 최신 코드 및 합의된 API 계약을 따른다. 관련 문서만 읽는다.
 
 ## 설계·구현
 - FastAPI와 MySQL을 사용한다. 구체적인 ORM, migration 도구, 인증 방식, 서비스 구조, 엔드포인트는 정해진 것으로 간주하지 않는다.
+- DB 구조는 사용자 제공 `Dump20261104.sql`에서 기록한 24개 테이블을 기준으로 한다. 기능 구현 전에 DB 구현 기준과 해당 테이블 DDL을 읽고 타입·nullable·키·CHECK·생성 컬럼·여행방/계획/버전 경계를 보존한다. 없는 테이블·컬럼·JSON 내부 구조를 가정하거나 API에 맞추려고 기존 DB를 임의 재설계하지 않는다.
+- root가 FE 명세와 관련 DB 제약을 planner/worker에게 함께 전달한다. 명세와 DB가 충돌하면 필요한 차이만 확인한다. 접속 정보는 별도 환경변수/개인 설정으로 다루고 원본 덤프 실행·DB 복원·자동 스키마 변경은 하지 않는다. 실제 DB 연결과 통합 검증은 아직 미실행이다.
 - API 규격은 FE가 Notion에 작성하고 BE는 `docs/api-contract.md`에 따라 구현 요청 항목을 읽어 그대로 구현·검증한다. 기존 API를 먼저 재사용하며 새 규격이 필요하면 FE에 전달한다. BE는 규격 본문을 임의로 바꾸지 않고 구현 상태·BE PR 링크만 갱신한다. 읽기 전용·로컬 전용은 외부 쓰기를 하지 않는다.
 - 명세의 요청·응답·오류·권한과 실제 동작을 맞춘다. 빠진 내용·모순·구현 불가능한 조건·보안상 문제만 FE에 확인하고 영향받는 부분을 보류한다. 별도 FE·BE 이중 승인이나 필수 API ID·개정·승인자 절차를 두지 않는다.
 - 작업 시작 시 명세를 읽고 구현 완료 보고 전 결과와 대조한다. 작업 도중 명세가 바뀌면 변경 의도를 확인해 영향받는 구현·검증만 갱신한다. PR에 관련 Notion 페이지·method/path·명세 핵심 내용과 실제 검사 결과를 남긴다.

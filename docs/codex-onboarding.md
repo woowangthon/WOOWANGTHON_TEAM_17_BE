@@ -8,6 +8,7 @@
 - 레포의 AGENTS.md, .codex, .agents/skills, docs를 확인한다. 프로젝트 내용을 검토해 신뢰를 설정하고 새 채팅에서 규칙 적용 여부를 확인한다.
 - 각자 본인 계정으로 GitHub와 Notion 플러그인을 연결한다. clone으로 토큰·페이지 권한·모델 접근 권한이 공유되지는 않는다. 팀 API 페이지의 읽기 권한을 확인하고, FE 명세 작성이나 BE 상태 갱신을 하려면 필요한 편집 권한도 준비한다.
 - 앱 설치·실행·검사는 각 레포의 실제 README와 설정을 따른다. BE는 아직 앱·Python 버전·ORM·인증·검사 도구가 미정이다.
+- DB 구조는 사용자 제공 덤프의 24개 테이블을 [DB 구현 기준](database-schema.md)과 [전체 DDL 참조](database-schema-reference.md)에 기록했다. 팀원은 clone한 문서를 바로 참고할 수 있다. 접속 호스트·DB 이름·계정·비밀번호는 별도로 준비하며 Notion이나 Git에 비밀값을 올리지 않는다.
 
 ~~~text
 git clone https://github.com/woowangthon/WOOWANGTHON_TEAM_17_FE.git
@@ -37,7 +38,7 @@ BE가 준비되기 전에는 mock으로 개발해줘.
 
 ## 3. BE에서 구현 요청하기
 
-BE Codex는 Notion의 구현 요청 항목을 읽고 그 규격대로 구현·검증한다. 별도 FE·BE 이중 승인 절차는 없다. 명세가 빠졌거나 모순되거나 구현·보안상 문제가 있을 때만 해당 내용을 FE에 확인한다. 규격 본문은 FE가 수정한다.
+BE Codex는 Notion의 구현 요청 항목과 관련 DB 테이블 정의를 읽고 기존 구조에 맞춰 구현·검증한다. 별도 FE·BE 이중 승인 절차는 없다. 명세 누락·DB 제약 충돌·구현/보안상 문제만 확인한다. API 규격 본문은 FE가 수정하고, DB 구조 변경이 필요하면 BE가 그 영향과 변경안을 먼저 제시한다.
 
 ~~~text
 Notion API 계약 페이지의 [기능] 구현 요청 항목을 읽고 그대로 구현해줘.
