@@ -1,0 +1,14 @@
+{
+  "dates": {
+    "start": "2026-12-12",
+    "end": "2026-12-13"
+  },
+  "transport": "자가용",
+  "total_budget_won": 600000,
+  "departure": {
+    "time": "09:00",
+    "region": "충북 청주시"
+  },
+  "headcount": 4,
+  "preferences_text": "단양으로 가고 싶어요. 조용한 자연 풍경과 온천을 원합니다. 많이 걷는 곳은 제외해 주세요."
+}
