@@ -34,7 +34,7 @@ FE는 같은 출처 API 프록시 또는 HTTPS 동일 출처 환경에서 쿠키
 
 첫 호출은 기기 세션 bootstrap입니다. 같은 브라우저의 여러 탭에서 초기 bootstrap이 겹치지 않도록 FE가 Web Locks 등의 탭 간 잠금을 적용해야 합니다. 생성/참여의 네트워크 재시도에서는 같은 입력과 Idempotency-Key를 유지합니다. 새로운 작업이나 입력 변경은 새 키를 사용합니다.
 
-이 서버의 HTTP/DB 검사만으로 FE 탭 간 처리나 실제 화면 연동을 완료했다고 간주하지 않습니다. 원본 `demo/trip-room`은 브라우저 저장소 데모로 보존했습니다. 별도 로컬 복사본 `demo/trip-room-live`에는 실제 API adapter를 붙여 같은 출처에서 제공합니다. 해당 파일과 검수용 wrapper는 BE 저장소 밖에 있으며 정식 FE PR에는 아직 반영하지 않았습니다. 실행과 수동 검수 항목은 [로컬 검수 안내](local-review.md)를 따릅니다.
+이 서버의 HTTP/DB 검사만으로 FE 탭 간 처리나 실제 화면 연동을 완료했다고 간주하지 않습니다. 검수한 시작·방 진입 화면은 인접 FE 저장소의 HTML/JavaScript로 관리하며 Vite가 빌드합니다. BE 루트 `run.py`는 FE의 `dist/`를 같은 출처로 제공합니다. 예전 임시 데모 폴더는 실행에 필요하지 않습니다. 실행과 수동 검수 항목은 [로컬 검수 안내](local-review.md)를 따릅니다.
 
 ## 테스트 환경
 
@@ -53,9 +53,10 @@ $env:TEST_DATABASE_URL = 'mysql+pymysql://root@127.0.0.1:3317/osami_entry_test'
 
 ## 이번 구현의 검증 결과
 
-- 격리 MySQL 8.0.41에서 `pytest -q tests`: 54 passed. 외부 Starlette/HTTPX 전환 권고 경고 1개가 있으며 실패는 없습니다.
+- 격리 MySQL 8.0.41에서 `pytest -q tests`: 기존 API/DB 54개와 실행 파일 15개를 합쳐 69 passed. 외부 Starlette/HTTPX 전환 권고 경고 1개가 있으며 실패는 없습니다.
 - `compileall -q app tests scripts`, `pip check`, `git diff --check` 통과.
 - 실제 Uvicorn HTTP 서버에서 `/docs` 200, API 경로 5개, 생성 201, 다른 기기 초대 참여 201, 같은 생성 요청 재시도 201 및 동일 결과, 방장 재접속 200, 실제 참여자 수 2명 확인.
 - 독립 검토에서 발견한 이벤트 루프의 동기 DB 호출, DB 연결의 UTC 설정 누락, 테스트 DB URL 쿼리 우회 문제 3건을 수정하고 재검토했습니다. DB 작업은 연결·잠금·트랜잭션 단위로 worker thread에서 실행합니다.
 - 생성 후 공통 조건 미정, 중복/동시 요청, 재시작 후 재시도, 실패 중 rollback, 쿠키/권한, 목록 cursor, migration down/up 시 기존 세 테이블 DDL 보존을 확인했습니다.
-- 위 54개 검사와 Uvicorn CRUD 검증은 격리 테스트 DB에서 수행했습니다. 이후 사용자 요청으로 `chungbuk_trip1` 연결과 추가 테이블 적용을 완료했습니다. 공용 DB에는 동일 테스트를 실행하지 않았고, 정식 FE 연동 및 브라우저 두 탭 인수 검사는 남아 있습니다.
+- 자동 검사와 Uvicorn CRUD 검증은 격리 테스트 DB에서 수행했습니다. 사용자 요청으로 공용 `chungbuk_trip1` 연결과 추가 테이블 적용도 완료했으며, 공용 DB에는 동일 테스트를 실행하지 않았습니다.
+- 후속 FE 빌드를 `run.py`의 기본 실행 경로로 연결했습니다. 격리 DB에서 실제 두 탭 방 생성·재접속과 다른 브라우저 초대 참여·기존 본인 유지·코드 복사를 확인했습니다. 생성 방 2개와 회원 3개, 두 방장의 동일 기기 세션 연결, 조건 NULL을 DB에서 대조했습니다. 이 검증은 전용 쿠키 이름을 사용해 공용 DB용 브라우저 기기 자격을 덮어쓰지 않았습니다. FE 최근 목록 UI와 여행 조건 설정은 이번 범위 밖입니다.

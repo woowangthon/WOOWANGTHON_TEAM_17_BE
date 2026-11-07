@@ -11,6 +11,8 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --env-file .env --host 127.0.0.1 --port 8000
 ```
 
+현재 여행방 화면과 API를 함께 보려면 인접한 FE 저장소에서 `npm ci`, `npm run build`를 먼저 실행합니다. 이후 파이참에서 BE의 `run.py`를 프로젝트 `.venv` 인터프리터로 실행합니다. 터미널에서는 `.\.venv\Scripts\python.exe run.py`입니다. 접속 주소는 `http://127.0.0.1:8017/`이며 프로젝트 루트의 개인 `.env`를 읽습니다. 화면은 기본적으로 인접한 `../WOOWANGTHON_TEAM_17_FE/dist` 빌드를 사용합니다. 다른 위치는 `FRONTEND_DIR`로 지정할 수 있습니다. [실행·검수 안내](docs/local-review.md)를 확인하세요.
+
 앱은 테이블을 자동 생성/변경하지 않습니다. 명시적 migration, 테스트 DB 준비, FE 호출 조건은 [여행방 시작 구현 문서](docs/trip-entry-implementation.md)를 확인하세요. 사용자 지정 공용 개발 DB `chungbuk_trip1`에는 추가 테이블 3개가 적용됐습니다(기존 26개 구조 보존, 현재 29개). 다른 환경은 적용 여부를 따로 확인해야 합니다.
 
 API 입력·응답·인증·오류는 [Notion 여행방 시작 명세](https://app.notion.com/p/40ee977e49088105a9b4ce4df0aef6f8)를 따릅니다. 실행 후 `/docs`에서 API 문서를 볼 수 있습니다. 회원가입 대신 기기 쿠키를 사용하며, 일반 실행은 worker 1개를 기준으로 합니다.

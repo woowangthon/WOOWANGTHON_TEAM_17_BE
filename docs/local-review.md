@@ -6,31 +6,41 @@
 
 현재 확인 주소는 `http://127.0.0.1:8017/`, API 문서는 `http://127.0.0.1:8017/docs`입니다. 연결 대상은 공용 개발 DB `chungbuk_trip1`입니다. 화면에서 만든 방은 실제 DB에 저장됩니다. 인원·날짜·예산·출발 시간 등의 설정은 이번 시작 화면 범위 밖입니다.
 
-현재 PC의 폴더 배치는 다음과 같습니다. HTML과 wrapper는 이 BE PR에 포함하지 않은 로컬 검수용 파일입니다. 다른 팀원이 BE만 clone하면 화면까지 제공되지는 않습니다.
+FE와 BE 저장소를 아래처럼 같은 상위 폴더에 clone합니다. FE에서 `npm ci`, `npm run build`를 실행해 화면 빌드를 준비합니다. 임시 데모 폴더는 실행에 필요하지 않습니다.
 
 ```text
 wowang/
   WOOWANGTHON_TEAM_17_BE/        # 파이참에서 여는 프로젝트
+    run.py                     # 화면과 API를 함께 실행
     .venv/
     .env                       # 개인 연결 설정, Git 제외
-  demo/trip-room-live/          # index.html, room.html: 실제 API 호출
-  .codex-work/trip-entry/
-    local_preview.py           # API와 위 HTML을 같은 출처로 제공
+  WOOWANGTHON_TEAM_17_FE/
+    dist/                      # npm run build 결과, Git 제외
+      index.html
+      room.html
+      ui-preview.html
+      assets/
 ```
 
-파이참에서 BE 폴더를 열고 Python 실행 구성을 추가합니다.
+파이참에서 BE 폴더를 열고 다음 순서로 실행합니다.
 
-- 인터프리터: 프로젝트의 `.venv/Scripts/python.exe` (Python 3.12)
-- 실행 대상: 스크립트 대신 모듈 `uvicorn`
-- 매개변수: `local_preview:app --app-dir ../.codex-work/trip-entry --host 127.0.0.1 --port 8017 --no-access-log`
-- 작업 디렉터리: `WOOWANGTHON_TEAM_17_BE` 폴더
+1. 인터프리터를 프로젝트의 `.venv/Scripts/python.exe` (Python 3.12)로 선택합니다.
+2. 프로젝트 루트의 `run.py`를 엽니다.
+3. 파일을 실행합니다. 별도의 실행 매개변수는 필요하지 않습니다.
+4. 브라우저에서 `http://127.0.0.1:8017/`을 엽니다.
 
-검수 wrapper가 BE의 개인 `.env`를 읽습니다. 비밀번호를 실행 매개변수나 공유 실행 구성에 넣지 않습니다. 서버는 하나만 실행합니다. 이미 주소가 열리면 실행 중인 서버를 사용하고, 파이참에서 재실행할 때는 기존 8017 서버를 먼저 종료합니다. 이 wrapper는 현재 PC의 8017 출처를 허용하므로 주소를 `localhost`로 바꾸지 않고 `127.0.0.1`로 엽니다.
+`run.py`가 자신의 위치를 기준으로 개인 `.env`와 FE 빌드 폴더를 찾으므로 파이참의 작업 디렉터리가 달라도 동작합니다. 비밀번호를 실행 매개변수나 공유 실행 구성에 넣지 않습니다. 서버는 하나만 실행합니다. 이미 주소가 열리면 실행 중인 서버를 사용하고, 파이참에서 재실행할 때는 기존 8017 서버를 먼저 종료합니다. 접속 주소는 `http://127.0.0.1:8017/`입니다. 파이참의 중지 버튼 또는 터미널의 Ctrl+C로 종료합니다. `?preview=ui`로 기존 공통 UI 확인 화면도 열 수 있습니다.
+
+실행 파일은 로컬 개발 설정만 허용하며 DB URL, 32자 이상 서명 키, 로컬 HTTP 쿠키 및 허용 출처 설정을 확인합니다. `.env.example`을 참고하되 `ALLOWED_ORIGINS`에 `http://127.0.0.1:8017`을 포함해야 합니다. 현재 PC의 개인 설정에는 이미 포함돼 있습니다. 셸이나 파이참에 설정한 환경변수가 있으면 `.env`보다 우선합니다.
+
+다른 FE 빌드 폴더를 사용할 때는 `FRONTEND_DIR` 환경변수를 지정합니다. 절대 경로 또는 BE 프로젝트 기준 상대 경로를 사용할 수 있으며 `index.html`, `room.html`이 필요합니다. 정해진 HTML과 빌드의 `assets/`, API·문서 경로만 제공합니다. 저장소 루트 전체를 정적 파일로 제공하지 않습니다.
+
+FE 코드를 수정하면서 확인할 때는 BE의 API 전용 서버를 8000에서 켜고 FE의 `npm run dev`를 사용합니다. FE 개발 서버 `http://127.0.0.1:5173`은 `/api` 요청을 8000으로 전달합니다. BE 개인 `.env`의 `ALLOWED_ORIGINS`에 이 5173 출처를 추가해야 합니다. 개발 프록시는 브라우저의 Origin을 그대로 전달합니다.
 
 BE 폴더의 파이참 터미널에서도 같은 서버를 실행할 수 있습니다.
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn local_preview:app --app-dir ../.codex-work/trip-entry --host 127.0.0.1 --port 8017 --no-access-log
+.\.venv\Scripts\python.exe run.py
 ```
 
 ## 수동 확인 순서
