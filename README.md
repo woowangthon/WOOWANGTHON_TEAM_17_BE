@@ -11,7 +11,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --env-file .env --host 127.0.0.1 --port 8000
 ```
 
-앱은 테이블을 자동 생성/변경하지 않습니다. 기존 24개 테이블에 추가할 명시적 migration, 테스트 DB 준비, FE 호출 조건은 [여행방 시작 구현 문서](docs/trip-entry-implementation.md)를 확인하세요. 운영 적용 전 추가 테이블 migration을 검토·적용해야 합니다.
+앱은 테이블을 자동 생성/변경하지 않습니다. 명시적 migration, 테스트 DB 준비, FE 호출 조건은 [여행방 시작 구현 문서](docs/trip-entry-implementation.md)를 확인하세요. 사용자 지정 공용 개발 DB `chungbuk_trip1`에는 추가 테이블 3개가 적용됐습니다(기존 26개 구조 보존, 현재 29개). 다른 환경은 적용 여부를 따로 확인해야 합니다.
 
 API 입력·응답·인증·오류는 [Notion 여행방 시작 명세](https://app.notion.com/p/40ee977e49088105a9b4ce4df0aef6f8)를 따릅니다. 실행 후 `/docs`에서 API 문서를 볼 수 있습니다. 회원가입 대신 기기 쿠키를 사용하며, 일반 실행은 worker 1개를 기준으로 합니다.
 
@@ -22,4 +22,4 @@ API 입력·응답·인증·오류는 [Notion 여행방 시작 명세](https://a
 .\.venv\Scripts\python.exe -m pytest -q tests
 ```
 
-로컬 HTML 시안은 별도 데모입니다. 이 백엔드 추가가 실제 FE 연동 완료를 뜻하지는 않습니다.
+로컬 검수 화면은 별도 HTML 복사본을 이 API에 연결합니다. [파이참 실행·검수 안내](docs/local-review.md)에 현재 PC에서 화면과 API를 켜는 방법을 정리했습니다. 정식 FE 저장소 반영과 최종 브라우저 인수 검사는 남아 있습니다.
