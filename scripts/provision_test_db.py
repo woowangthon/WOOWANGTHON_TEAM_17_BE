@@ -15,6 +15,7 @@ from sqlalchemy.engine import make_url
 ROOT = Path(__file__).resolve().parents[1]
 TEST_SCHEMA = "osami_entry_test"
 TABLES = (
+    "preparation_interpret_requests", "member_preparation_documents", "trip_preparation_documents",
     "api_idempotency", "device_session_memberships", "device_sessions",
     "trip_conditions", "trip_members", "trips",
 )
@@ -41,7 +42,7 @@ def run_sql(connection, sql: str):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--reset", action="store_true", help="Reset ONLY the six disposable test tables.")
+    parser.add_argument("--reset", action="store_true", help="Reset ONLY the explicitly listed disposable test tables.")
     args = parser.parse_args()
     url = checked_url()
     admin = create_engine(url.set(database=""), hide_parameters=True)
@@ -65,8 +66,9 @@ def main():
                 raise SystemExit(f"Missing exact baseline DDL: {table}")
             run_sql(conn, match.group(1))
         run_sql(conn, (ROOT / "migrations/001_device_entry.up.sql").read_text(encoding="utf-8"))
+        run_sql(conn, (ROOT / "migrations/002_preparation.up.sql").read_text(encoding="utf-8"))
     engine.dispose()
-    print("Provisioned six test tables on isolated loopback MySQL (application DB untouched).")
+    print("Provisioned entry and preparation tables on isolated loopback MySQL.")
 
 
 if __name__ == "__main__":
