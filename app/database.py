@@ -6,7 +6,7 @@ import sys
 from collections.abc import Generator
 from typing import Any
 
-from .config import DatabaseSettings, load_settings
+from .config import ConfigurationError, DatabaseSettings, load_settings
 
 
 def connect(settings: DatabaseSettings | None = None) -> Any:
@@ -14,6 +14,8 @@ def connect(settings: DatabaseSettings | None = None) -> Any:
     import pymysql
 
     config = settings or load_settings()
+    if config.query:
+        raise ConfigurationError("DATABASE_URL query options are not supported by this connection helper")
     return pymysql.connect(
         host=config.host,
         port=config.port,

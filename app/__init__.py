@@ -1,1 +1,1 @@
-"""Backend application package."""
+"""Trip entry API."""

@@ -6,10 +6,18 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from app.config import DatabaseSettings
+from app.config import ConfigurationError
 from app.database import get_db
 
 
 class ConnectionCleanupTests(unittest.TestCase):
+    def test_legacy_pymysql_helper_refuses_database_url_options(self):
+        config = DatabaseSettings("localhost", 3306, "reader", "secret", "travel", {"ssl": "true"})
+        with self.assertRaisesRegex(ConfigurationError, "query options"):
+            from app.database import connect
+
+            connect(config)
+
     def test_import_and_dependency_creation_do_not_connect_until_iterated(self) -> None:
         driver = SimpleNamespace(cursors=SimpleNamespace(DictCursor=object()))
         fake_connection = SimpleNamespace(rollback=lambda: None, close=lambda: None)
