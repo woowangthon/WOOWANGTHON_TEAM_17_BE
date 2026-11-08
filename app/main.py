@@ -20,6 +20,7 @@ from sqlalchemy.engine import Engine
 from starlette.concurrency import run_in_threadpool
 
 from .config import Settings
+from .preparation import register_preparation_routes
 
 COOKIE_HOST = "__Host-osami_session"
 COOKIE_DEV = "osami_session"
@@ -32,6 +33,8 @@ class ApiError(Exception):
     def __init__(self, status: int, code: str, message: str, fields: dict[str, str] | None = None, retry: int | None = None):
         self.status, self.code, self.message = status, code, message
         self.fields, self.retry = fields or {}, retry
+        self.current_conditions_version: int | None = None
+        self.current_preference_version: int | None = None
 
 
 class Limiter:
@@ -96,7 +99,12 @@ async def body_json(request: Request, allowed: set[str]) -> dict[str, Any]:
 
 
 def response_error(error: ApiError, request_id: str) -> JSONResponse:
-    payload = {"error": {"code": error.code, "message": error.message, "fieldErrors": error.fields, "requestId": request_id}}
+    detail = {"code": error.code, "message": error.message, "fieldErrors": error.fields, "requestId": request_id}
+    if error.current_conditions_version is not None:
+        detail["currentConditionsVersion"] = error.current_conditions_version
+    if error.current_preference_version is not None:
+        detail["currentPreferenceVersion"] = error.current_preference_version
+    payload = {"error": detail}
     headers = {"Cache-Control": "no-store"}
     if error.retry:
         headers["Retry-After"] = str(error.retry)
@@ -134,7 +142,7 @@ def cursor_decode(key: str, token: str, session_id: str) -> tuple[datetime, str]
         raise ApiError(400, "INVALID_CURSOR", "커서를 확인해 주세요.", {"cursor": "유효하지 않은 커서입니다."})
 
 
-def create_app(settings: Settings) -> FastAPI:
+def create_app(settings: Settings, preparation_interpreter=None) -> FastAPI:
     engine: Engine = create_engine(
         settings.database_url or "mysql+pymysql://invalid:invalid@127.0.0.1/invalid",
         pool_pre_ping=True,
@@ -399,6 +407,13 @@ def create_app(settings: Settings) -> FastAPI:
             return resp
         finally:
             conn.close()
+
+    register_preparation_routes(
+        app, engine, settings, find_session=find_session, cookie_name=cookie_name,
+        origin_check=origin_check, body_json=body_json, ApiError=ApiError,
+        set_session_cookie=set_session_cookie,
+        interpreter=preparation_interpreter,
+    )
 
     @app.post("/api/v1/device-session")
     async def bootstrap(request: Request):

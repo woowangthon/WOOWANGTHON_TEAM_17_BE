@@ -91,6 +91,9 @@ def _delete_test_rows(engine: Engine) -> None:
     # deletes, never DDL; baseline tables are retained unchanged.
     with engine.begin() as connection:
         for table in (
+            "preparation_interpret_requests",
+            "member_preparation_documents",
+            "trip_preparation_documents",
             "api_idempotency",
             "device_session_memberships",
             "device_sessions",
