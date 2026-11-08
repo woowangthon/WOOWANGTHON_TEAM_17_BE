@@ -85,14 +85,34 @@ def build_app(*, settings=None, env_file: str | Path | None = None, frontend_dir
     """
     if settings is None:
         from dotenv import load_dotenv
+        from app.config import ConfigurationError, Settings
+
+        process_values = dict(os.environ)
+        has_process_url = bool(process_values.get("DATABASE_URL"))
+        process_db_names = {"DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD", "DB_NAME"}
+        has_process_db_parts = any(name in process_values for name in process_db_names)
+        if has_process_db_parts and not has_process_url:
+            # Force validation against the process environment before .env can fill
+            # missing values or select another target.
+            try:
+                Settings.from_env(process_values)
+            except ConfigurationError as exc:
+                raise LauncherError(str(exc)) from None
 
         selected_env = Path(env_file) if env_file is not None else ROOT / ".env"
         if not selected_env.is_absolute():
             selected_env = ROOT / selected_env
-        load_dotenv(selected_env, override=False)
-        from app.config import Settings
+        load_dotenv(selected_env, override=False, interpolate=False)
 
-        settings = Settings.from_env()
+        resolved_values = dict(os.environ)
+        if has_process_url:
+            resolved_values["DATABASE_URL"] = process_values["DATABASE_URL"]
+        elif has_process_db_parts:
+            resolved_values["DATABASE_URL"] = Settings.from_env(process_values).database_url or ""
+        try:
+            settings = Settings.from_env(resolved_values)
+        except ConfigurationError as exc:
+            raise LauncherError(str(exc)) from None
 
     _validate_settings(settings)
     assets = _resolve_frontend(frontend_dir)

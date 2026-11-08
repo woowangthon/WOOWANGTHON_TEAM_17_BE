@@ -128,6 +128,35 @@ def test_dotenv_and_frontend_override_are_loaded_only_when_building_app(tmp_path
     assert app.state.settings.local_http_cookie is True
 
 
+def test_partial_process_database_settings_fail_safely_before_dotenv(monkeypatch):
+    monkeypatch.setenv("DB_HOST", "private-host-value")
+    monkeypatch.setenv("DB_PORT", "private-invalid-port")
+    for name in ("DATABASE_URL", "DB_USERNAME", "DB_PASSWORD", "DB_NAME"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(run.LauncherError) as caught:
+        run.build_app()
+
+    assert "DB_USERNAME" in str(caught.value)
+    assert "private-host-value" not in str(caught.value)
+    assert "private-invalid-port" not in str(caught.value)
+
+
+def test_incomplete_file_database_settings_fail_safely(monkeypatch):
+    def fake_load_dotenv(*args, **kwargs):
+        monkeypatch.setenv("DB_HOST", "private-file-host")
+
+    monkeypatch.setitem(sys.modules, "dotenv", types.SimpleNamespace(load_dotenv=fake_load_dotenv))
+    for name in ("DATABASE_URL", "DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD", "DB_NAME"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(run.LauncherError) as caught:
+        run.build_app()
+
+    assert "DB_USERNAME" in str(caught.value)
+    assert "private-file-host" not in str(caught.value)
+
+
 def test_import_is_inert_and_does_not_load_dotenv_or_application(tmp_path: Path):
     repo = Path(run.__file__).resolve().parent
     env = os.environ.copy()
