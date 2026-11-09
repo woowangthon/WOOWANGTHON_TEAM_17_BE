@@ -1,5 +1,6 @@
 """Synthetic, DB-free tests for review-gated candidate selection."""
 from dataclasses import dataclass
+from decimal import Decimal
 
 import pytest
 
@@ -147,6 +148,17 @@ def test_tags_are_exact_tokens_and_duplicates_do_not_inflate_scores():
     assert len(rows) == 2
     assert rows[0]["groupScore"] == rows[1]["groupScore"] == 1.0
     assert [x["contentid"] for x in rows] == [1, 2]
+
+
+def test_mysql_decimal_coordinates_do_not_enter_strict_input_json_validator():
+    snap = source(avoid=None)
+    norm = normalized(field=None)
+    row = place(1)
+    row.update(mapx=Decimal("127.4341000000"), mapy=Decimal("36.6286000000"))
+    cat = Catalog([row], preferences=[{"contentid": 1, "preferenceTags": "자연"}])
+    selection = build(snap, norm, cat)
+    eligible = selection.as_dict()["eligible"]
+    assert eligible[0]["coordinate"] == {"latitude": 36.6286, "longitude": 127.4341, "crs": "WGS84"}
 
 
 def test_substring_tag_does_not_satisfy_a_required_predicate():

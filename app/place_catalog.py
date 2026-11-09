@@ -139,7 +139,7 @@ class PlaceCatalog:
         return result
 
 
-def load_place_catalog(conn: Any, supported_tags: tuple[str, ...] | list[str] = ()) -> PlaceCatalog:
+def load_place_catalog(conn: Any, supported_tags: tuple[str, ...] | list[str] = (), *, lock: bool = False) -> PlaceCatalog:
     """Reflect only fixed table names/allowlisted fields and issue SELECTs only."""
     if not isinstance(supported_tags, (tuple, list)) or any(not isinstance(tag, str) for tag in supported_tags):
         raise ValueError("supported_tags must be an explicit sequence of strings")
@@ -163,7 +163,12 @@ def load_place_catalog(conn: Any, supported_tags: tuple[str, ...] | list[str] = 
             selected = [table.c[column] for column in allowed if column in table.c]
             if table.c.contentid not in selected:
                 selected.insert(0, table.c.contentid)
-            rows = conn.execute(select(*selected)).mappings().all()
+            query = select(*selected)
+            # Completion/save transactions keep reviewed catalog facts stable
+            # until their commit. Ordinary catalog reads remain non-locking.
+            if lock:
+                query = query.with_for_update(read=True)
+            rows = conn.execute(query).mappings().all()
             detached = [{key: row[key] for key in row.keys()} for row in rows]
             if any(not _contentid(row.get("contentid")) for row in detached):
                 raise PlaceCatalogError("catalog contentid value is incompatible")

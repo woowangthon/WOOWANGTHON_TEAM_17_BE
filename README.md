@@ -1,6 +1,6 @@
 # WOOWANGTHON_TEAM_17_BE
 
-충북 단체여행 서비스 FastAPI/MySQL 백엔드입니다. 현재 구현 범위는 기기 세션, 여행방 생성·초대 참여·최근 여행 조회·재접속입니다. 인원과 여행 조건은 방 생성 이후 설정하며 시작 API에서 임의 확정하지 않습니다.
+충북 단체여행 서비스 FastAPI/MySQL 백엔드입니다. 기기 세션과 여행방 시작, 공유 여행 준비·개인 조건, 일정 후보 선별·AI 초안·실제 경로 검증·명시적 저장을 제공합니다. 인원과 여행 조건은 방 생성 이후 설정하며 시작 API에서 임의 확정하지 않습니다.
 
 Python 3.12 이상과 MySQL 8.0.16 이상이 필요합니다. 설치와 실행:
 
@@ -52,11 +52,11 @@ AI 프로젝트 루트의 개인 `.env`에 `GEMINI_API_KEY`를 설정합니다. 
 
 ## 검증
 
-후보 장소 필터·개인별/단체 점수와 AI 날짜별 방문 초안(3·4단계)은 [후보·초안 안내](docs/candidate-draft.md)를 참고하세요. AI 패키지 0.4.0을 사용하며 실제 경로·시간 검증·저장·FE 연결은 후속입니다.
+후보 장소 필터·개인별/단체 점수와 AI 날짜별 방문 초안(3·4단계)은 [후보·초안 안내](docs/candidate-draft.md)를 참고하세요. AI 패키지 0.4.0을 사용하며 실제 경로·시간 검증·저장·FE 연결은 [일정 생성 안내](docs/generation-implementation.md)를 참고하세요. migration 003은 공용 DB에 자동 적용하지 않습니다.
 
 일정 생성의 첫 두 단계인 확정 조건 캡처·읽기 전용 장소 매핑과 확정 취향 AI 구조화는 [내부 기반 안내](docs/generation-foundation.md)를 참고하세요. 새 HTTP API·후보 점수 계산·실제 일정 생성은 포함하지 않습니다.
 
-여행 준비·개인 조건의 신규 6개 API, 버전·개인정보·AI 제안 처리와 명시적 migration 002는 [구현·검증 안내](docs/preparation-implementation.md)를 확인하세요. AI 해석에는 별도 AI 패키지 0.2.0의 공개 함수를 사용하며, FE 화면의 신규 API 연결은 후속 작업입니다.
+여행 준비·개인 조건의 신규 6개 API, 버전·개인정보·AI 제안 처리와 명시적 migration 002는 [구현·검증 안내](docs/preparation-implementation.md)를 확인하세요. AI 해석에는 별도 AI 패키지 0.2.0의 공개 함수를 사용하며, FE 개인 조건 연결과 별도 해석 검토·확정 흐름은 일정 생성 작업에 포함됩니다.
 
 검증된 의존성 버전은 `requirements.lock`에 기록했습니다. 같은 환경을 재현할 때는 먼저 `pip install -r requirements.lock`, 이후 `pip install -e . --no-deps`를 사용할 수 있습니다. 테스트는 HTTPX 기반 TestClient로 실행하며, 현재 라이브러리의 HTTPX2 전환 권고 경고는 동작 검증 결과와 별도로 기록합니다.
 

@@ -64,6 +64,7 @@ class Settings:
     cursor_signing_key: str | None = field(default=None, repr=False)
     local_http_cookie: bool = False
     rate_limit_enabled: bool = True
+    kakao_rest_api_key: str | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":
@@ -77,6 +78,7 @@ class Settings:
             cursor_signing_key=values.get("CURSOR_SIGNING_KEY"),
             local_http_cookie=values.get("LOCAL_HTTP_COOKIE", "false").lower() == "true",
             rate_limit_enabled=values.get("RATE_LIMIT_ENABLED", "true").lower() != "false",
+            kakao_rest_api_key=values.get("KAKAO_REST_API_KEY"),
         )
 
 

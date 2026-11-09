@@ -134,11 +134,13 @@ def test_entry_migration_down_up_preserves_exact_baseline_ddl(db_engine: Engine)
 
     before = snapshot()
     with db_engine.connect() as connection:
+        _run_sql_script(connection, migration_dir / "003_generation.down.sql")
         _run_sql_script(connection, migration_dir / "002_preparation.down.sql")
         _run_sql_script(connection, down)
         assert connection.scalar(text("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=:db AND TABLE_NAME IN ('device_sessions','device_session_memberships','api_idempotency')"), {"db": EXPECTED_DATABASE}) == 0
         _run_sql_script(connection, up)
         _run_sql_script(connection, migration_dir / "002_preparation.up.sql")
+        _run_sql_script(connection, migration_dir / "003_generation.up.sql")
     assert snapshot() == before
 
 

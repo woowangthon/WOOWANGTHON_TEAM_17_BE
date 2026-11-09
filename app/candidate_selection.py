@@ -383,7 +383,13 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
         detail_by, pref_by = grouped(details), grouped(preferences)
         pool, excluded, review_candidates = [], [], []
         pending = ["ROUTE_UNVERIFIED", "WALKING_UNVERIFIED", "BUDGET_UNVERIFIED", "OPENING_HOURS_UNVERIFIED"]
-        for place in sorted(places, key=lambda x: _canonical(x) if isinstance(x, Mapping) else ""):
+        # MySQL DOUBLE columns may be reflected as Decimal. Catalog rows are
+        # already bound by the adapter digest; sort by their signed INT identity
+        # without applying the strict JSON input/review validator to DB scalars.
+        def place_order(row):
+            cid = row.get("contentid") if isinstance(row, Mapping) else None
+            return (0, cid) if type(cid) is int and -(2**31) <= cid <= 2**31-1 else (1, 0)
+        for place in sorted(places, key=place_order):
             if not isinstance(place, Mapping): continue
             cid = place.get("contentid")
             if isinstance(cid, bool) or not isinstance(cid, int) or not -(2**31) <= cid <= 2**31-1: continue
