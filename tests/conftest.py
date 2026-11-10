@@ -8,6 +8,7 @@ dedicated local test schema before opening a connection.
 from __future__ import annotations
 
 import os
+import importlib
 from collections.abc import Iterator
 
 import pytest
@@ -20,6 +21,20 @@ EXPECTED_HOST = "127.0.0.1"
 EXPECTED_PORT = 3317
 EXPECTED_DATABASE = "osami_entry_test"
 TEST_ORIGIN = "http://127.0.0.1:8000"
+
+
+@pytest.fixture(autouse=True)
+def no_live_https_providers(monkeypatch):
+    """Every provider test must explicitly replace HTTPS; never spend real keys."""
+    def blocked(*args, **kwargs):
+        raise AssertionError("Live provider calls are forbidden in automated tests")
+    for name in ("app.routing", "chungbuk_trip_ai.gemini", "chungbuk_trip_ai.normalization", "chungbuk_trip_ai.scheduling"):
+        try:
+            module = importlib.import_module(name)
+        except ImportError:
+            continue
+        if hasattr(module, "HTTPSConnection"):
+            monkeypatch.setattr(module, "HTTPSConnection", blocked)
 
 
 def _test_database_url() -> URL:
@@ -90,6 +105,16 @@ def _delete_test_rows(engine: Engine) -> None:
     # Tests run only against this dedicated empty schema.  These are data
     # deletes, never DDL; baseline tables are retained unchanged.
     with engine.begin() as connection:
+        connection.execute(text("DELETE FROM generation_jobs"))
+        connection.execute(text("DELETE FROM generation_member_reviews"))
+        connection.execute(text("DELETE FROM generation_settings"))
+        connection.execute(text("DELETE FROM ai_requests"))
+        connection.execute(text("DELETE FROM itinerary_edges"))
+        connection.execute(text("DELETE FROM itinerary_nodes"))
+        connection.execute(text("UPDATE plans SET current_version_id=NULL,active_draft_id=NULL"))
+        connection.execute(text("DELETE FROM plan_versions"))
+        connection.execute(text("DELETE FROM plans"))
+        connection.execute(text("DELETE FROM group_snapshots"))
         for table in (
             "preparation_interpret_requests",
             "member_preparation_documents",
@@ -100,6 +125,7 @@ def _delete_test_rows(engine: Engine) -> None:
             "trip_conditions",
             "trip_members",
             "trips",
+            "place_preferences", "place_details", "places",
         ):
             connection.execute(text(f"DELETE FROM `{table}`"))
 

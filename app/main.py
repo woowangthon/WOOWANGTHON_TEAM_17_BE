@@ -142,7 +142,8 @@ def cursor_decode(key: str, token: str, session_id: str) -> tuple[datetime, str]
         raise ApiError(400, "INVALID_CURSOR", "커서를 확인해 주세요.", {"cursor": "유효하지 않은 커서입니다."})
 
 
-def create_app(settings: Settings, preparation_interpreter=None) -> FastAPI:
+def create_app(settings: Settings, preparation_interpreter=None, *, generation_normalizer=None,
+               generation_drafter=None, generation_router=None) -> FastAPI:
     engine: Engine = create_engine(
         settings.database_url or "mysql+pymysql://invalid:invalid@127.0.0.1/invalid",
         pool_pre_ping=True,
@@ -413,6 +414,17 @@ def create_app(settings: Settings, preparation_interpreter=None) -> FastAPI:
         origin_check=origin_check, body_json=body_json, ApiError=ApiError,
         set_session_cookie=set_session_cookie,
         interpreter=preparation_interpreter,
+    )
+
+    from .generation_api import register_generation_routes
+    from .routing import KakaoRouter
+
+    register_generation_routes(
+        app, engine, settings, find_session=find_session, cookie_name=cookie_name,
+        origin_check=origin_check, body_json=body_json, ApiError=ApiError,
+        set_session_cookie=set_session_cookie, normalizer=generation_normalizer,
+        drafter=generation_drafter,
+        router=generation_router if generation_router is not None else KakaoRouter(settings.kakao_rest_api_key),
     )
 
     @app.post("/api/v1/device-session")

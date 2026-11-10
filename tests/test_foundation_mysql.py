@@ -216,7 +216,6 @@ def synthetic_catalog(app):
                     Column("openingHoursText", String(100)), Column("feeText", String(100)))
     preferences = Table("place_preferences", metadata, Column("contentid", Integer),
                         Column("preferenceTags", String(100)), Column("natureScore", Integer))
-    metadata.create_all(engine)
     try:
         with engine.begin() as conn:
             conn.execute(places.insert(), [
@@ -229,7 +228,10 @@ def synthetic_catalog(app):
             conn.execute(preferences.insert(), [{"contentid": 101, "preferenceTags": "원문|태그", "natureScore": 0}])
         yield engine
     finally:
-        metadata.drop_all(engine)
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE place_preferences MODIFY contentid INT NULL"))
+            for name in ("place_preferences", "place_details", "places"):
+                conn.execute(text(f"DELETE FROM `{name}`"))
 
 
 def test_mysql_reflection_selects_known_fields_and_preserves_marker_identity(synthetic_catalog):
@@ -262,6 +264,6 @@ def test_mysql_reflection_selects_known_fields_and_preserves_marker_identity(syn
 @pytest.mark.parametrize("mysql_type", ["BIGINT", "SMALLINT", "INT UNSIGNED", "VARCHAR(30)"])
 def test_mysql_catalog_rejects_incompatible_contentid_types(synthetic_catalog, mysql_type):
     with synthetic_catalog.begin() as conn:
-        conn.execute(text(f"ALTER TABLE places MODIFY contentid {mysql_type}"))
+        conn.execute(text(f"ALTER TABLE place_preferences MODIFY contentid {mysql_type}"))
     with synthetic_catalog.connect() as conn, pytest.raises(PlaceCatalogError):
         load_place_catalog(conn)

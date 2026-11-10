@@ -15,9 +15,12 @@ from sqlalchemy.engine import make_url
 ROOT = Path(__file__).resolve().parents[1]
 TEST_SCHEMA = "osami_entry_test"
 TABLES = (
+    "generation_jobs", "generation_member_reviews", "generation_settings", "ai_requests",
+    "itinerary_edges", "itinerary_nodes", "plan_versions", "plans", "group_snapshots",
     "preparation_interpret_requests", "member_preparation_documents", "trip_preparation_documents",
     "api_idempotency", "device_session_memberships", "device_sessions",
     "trip_conditions", "trip_members", "trips",
+    "place_preferences", "place_details", "places",
 )
 
 
@@ -57,6 +60,13 @@ def main():
         if present and not args.reset:
             raise SystemExit("Test schema already populated; use explicit --reset for disposable test data.")
         if args.reset:
+            if "plans" in present:
+                # Break only the two known pointer FKs in this disposable schema;
+                # ordinary application writes never disable foreign-key checks.
+                keys = conn.exec_driver_sql("SHOW CREATE TABLE plans").first()[1]
+                for key in ("fk_plan_current", "fk_plan_draft"):
+                    if f"CONSTRAINT `{key}`" in keys:
+                        conn.exec_driver_sql(f"ALTER TABLE plans DROP FOREIGN KEY `{key}`")
             for table in TABLES:
                 conn.execute(text(f"DROP TABLE IF EXISTS `{table}`"))
         reference = (ROOT / "docs/database-schema-reference.md").read_text(encoding="utf-8")
@@ -67,8 +77,10 @@ def main():
             run_sql(conn, match.group(1))
         run_sql(conn, (ROOT / "migrations/001_device_entry.up.sql").read_text(encoding="utf-8"))
         run_sql(conn, (ROOT / "migrations/002_preparation.up.sql").read_text(encoding="utf-8"))
+        run_sql(conn, (ROOT / "tests/fixtures/generation_schema.sql").read_text(encoding="utf-8"))
+        run_sql(conn, (ROOT / "migrations/003_generation.up.sql").read_text(encoding="utf-8"))
     engine.dispose()
-    print("Provisioned entry and preparation tables on isolated loopback MySQL.")
+    print("Provisioned entry, preparation and generation fixtures on isolated loopback MySQL.")
 
 
 if __name__ == "__main__":
