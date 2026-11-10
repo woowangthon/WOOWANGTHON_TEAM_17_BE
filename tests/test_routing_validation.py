@@ -106,6 +106,31 @@ def test_kst_projection_ceil_minutes_and_unknown_prices_hours():
     assert result["validation"]["totalCostKrw"] is None
 
 
+def test_departure_time_and_confirmed_group_clock_anchor_reach_time_validation():
+    settings = {"activityWindow": {"start": "09:00", "end": "18:00"}, "departureAnchor": None,
+                "returnAnchor": None, "reviewedCommonFields": [],
+                "confirmedScheduleAnchors": [{"date": "2026-12-12", "contentid": 11, "position": 0,
+                                               "kind": "appointment", "startTime": "11:00",
+                                               "endTime": "12:00", "endDate": None}]}
+    result = run_validation(settings=settings, conditions={"transport": "walk", "expectedPeople": 1,
+                              "budget": 10000, "departureTime": "10:00"})
+    visit = result["days"][0]["nodes"][1]
+    assert visit["estimatedStartAt"] == "2026-12-12T02:00:00.000Z"
+    assert visit["estimatedEndAt"] == "2026-12-12T03:00:00.000Z"
+    assert visit["locked"] is True
+
+
+def test_lodging_checkin_time_is_not_treated_as_an_arrival_deadline():
+    settings = {"activityWindow": {"start": "09:00", "end": "18:00"}, "departureAnchor": None,
+                "returnAnchor": None, "reviewedCommonFields": [],
+                "confirmedScheduleAnchors": [{"date": "2026-12-12", "contentid": 11, "position": 0,
+                                               "kind": "lodging", "startTime": "10:00",
+                                               "endTime": None, "endDate": "2026-12-13"}]}
+    result = run_validation(settings=settings, conditions={"transport": "walk", "expectedPeople": 1,
+                              "budget": 10000, "departureTime": "11:00"})
+    assert "FIXED_START_MISSED" not in {item["code"] for item in result["validation"]["violations"]}
+
+
 @pytest.mark.parametrize("seconds, expected", [(1200, "verified"), (1201, "violated")])
 def test_walking_limit_is_per_leg_and_not_rounded_down(seconds, expected):
     result = run_validation(router=Router(seconds=seconds))

@@ -17,7 +17,7 @@ def test_defaults_get_is_read_only_and_error_envelope(client, db_engine):
     assert prep.status_code == 200, prep.text
     data = prep.json()
     assert data["conditionsVersion"] == 0
-    assert data["conditions"] == {key: None for key in CONDITIONS}
+    assert data["conditions"] == {**{key: None for key in CONDITIONS}, "departureTime": "09:00"}
     assert data["activeMemberCount"] == 1
     assert data["canEditConditions"] is True
     assert data["members"] == [{"id": room["member"]["id"], "nickname": "방장", "role": "OWNER", "preparationStatus": "writing"}]
@@ -26,7 +26,8 @@ def test_defaults_get_is_read_only_and_error_envelope(client, db_engine):
     personal = client.get(base(room) + "/preferences/me").json()
     assert personal["preferenceVersion"] == 0
     assert personal["draft"] == {"originalText": None, "likes": None, "avoid": None,
-        "avoidImportance": "required", "food": None, "foodImportance": "preferred", "walking": None}
+        "avoidImportance": "required", "food": None, "foodImportance": "preferred", "walking": None, "scheduleItems": []}
+    assert personal["clarifications"] == []
     assert personal["confirmation"] == {"status": "writing", "confirmedConditionsVersion": None,
         "confirmedPreferenceVersion": None, "confirmedAt": None}
     assert prep.headers["cache-control"] == "no-store"

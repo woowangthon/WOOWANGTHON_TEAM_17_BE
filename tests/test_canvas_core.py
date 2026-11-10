@@ -59,7 +59,7 @@ def test_canvas_validation_graph_rules_and_exact_fields():
         validate_document(bad)
     bad = {"schemaVersion": 3, "days": [{"id": DAY, "date": None}], "nodes": [
         {"id": str(uuid.uuid4()), "kind": "comment", "dayId": DAY, "position": {"x": 0, "y": 0}, "color": "default", "text": "x"}
-        for _ in range(101)], "edges": []}
+        for _ in range(501)], "edges": []}
     with pytest.raises(CanvasValidationError):
         validate_document(bad)
     bad = doc()

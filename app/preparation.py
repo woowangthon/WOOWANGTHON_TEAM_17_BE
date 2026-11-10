@@ -15,9 +15,10 @@ from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
 
 
-CONDITION_KEYS = ("region", "startDate", "endDate", "expectedPeople", "budget", "transport", "departure", "returnRoute", "lodging", "fixedSchedule")
+CONDITION_KEYS = ("region", "startDate", "endDate", "expectedPeople", "budget", "transport", "departure", "returnRoute", "lodging", "fixedSchedule", "departureTime", "departureContentid")
 PERSONAL_KEYS = ("originalText", "likes", "avoid", "avoidImportance", "food", "foodImportance", "walking")
-SUGGESTION_KEYS = ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking")
+SCHEDULE_ITEM_KEYS = {"id", "kind", "scope", "placeQuery", "contentid", "date", "time", "endDate", "endTime"}
+SUGGESTION_KEYS = ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking", "scheduleItems")
 TRANSPORTS = {"car", "transit", "charter", "walk"}
 IMPORTANCE = {"required", "preferred"}
 WALKING = {"20", "40", "unlimited"}
@@ -83,7 +84,9 @@ def _date(value: Any, field: str) -> str | None:
 
 
 def validate_conditions(raw: Any) -> dict[str, Any]:
-    data = _obj(raw, CONDITION_KEYS, "conditions")
+    if not isinstance(raw, dict) or set(raw) - set(CONDITION_KEYS) or set(raw) - {"departureTime", "departureContentid"} != set(CONDITION_KEYS) - {"departureTime", "departureContentid"}:
+        _fail(400, "VALIDATION_ERROR", {"conditions": "필수 필드 구성을 확인해 주세요."})
+    data = {**_initial_conditions(), **raw}
     out: dict[str, Any] = {}
     out["region"] = _text(data["region"], "conditions.region", 100)
     out["startDate"] = _date(data["startDate"], "conditions.startDate")
@@ -101,11 +104,24 @@ def validate_conditions(raw: Any) -> dict[str, Any]:
     out["transport"] = transport
     for key, maximum in (("departure", 100), ("returnRoute", 100), ("lodging", 200), ("fixedSchedule", 500)):
         out[key] = _text(data[key], f"conditions.{key}", maximum)
+    departure_time = data["departureTime"]
+    if departure_time is None:
+        out["departureTime"] = None if "departureTime" in raw else "09:00"
+    elif isinstance(departure_time, str) and re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", departure_time):
+        out["departureTime"] = departure_time
+    else:
+        _fail(400, "VALIDATION_ERROR", {"conditions.departureTime": "HH:MM 시각을 입력해 주세요."})
+    contentid = data["departureContentid"]
+    if contentid is not None and (isinstance(contentid, bool) or not isinstance(contentid, int) or not -(2**31) <= contentid <= 2**31 - 1):
+        _fail(400, "VALIDATION_ERROR", {"conditions.departureContentid": "정수 또는 null을 입력해 주세요."})
+    out["departureContentid"] = contentid
     return out
 
 
 def validate_draft(raw: Any) -> dict[str, Any]:
-    data = _obj(raw, PERSONAL_KEYS, "draft")
+    if not isinstance(raw, dict) or set(raw) - (set(PERSONAL_KEYS) | {"scheduleItems"}) or set(raw) - {"scheduleItems"} != set(PERSONAL_KEYS):
+        _fail(400, "VALIDATION_ERROR", {"draft": "필수 필드 구성을 확인해 주세요."})
+    data = {**raw, "scheduleItems": raw.get("scheduleItems", [])}
     out = {"originalText": _text(data["originalText"], "draft.originalText", 5000, True)}
     for key in ("likes", "avoid", "food"):
         out[key] = _text(data[key], f"draft.{key}", 500, True)
@@ -117,6 +133,46 @@ def validate_draft(raw: Any) -> dict[str, Any]:
     if walking is not None and (not isinstance(walking, str) or walking not in WALKING):
         _fail(400, "VALIDATION_ERROR", {"draft.walking": "허용된 도보 한계를 입력해 주세요."})
     out["walking"] = walking
+    items = data["scheduleItems"]
+    if not isinstance(items, list) or len(items) > 20:
+        _fail(400, "VALIDATION_ERROR", {"draft.scheduleItems": "일정 항목은 20개 이하로 입력해 주세요."})
+    clean_items = []
+    seen = set()
+    for index, item in enumerate(items):
+        field = f"draft.scheduleItems.{index}"
+        if not isinstance(item, dict) or set(item) != SCHEDULE_ITEM_KEYS:
+            _fail(400, "VALIDATION_ERROR", {field: "일정 항목 구성을 확인해 주세요."})
+        try:
+            item_id = str(uuid.UUID(item["id"]))
+            if item_id != item["id"].lower(): raise ValueError
+        except (ValueError, AttributeError, TypeError):
+            _fail(400, "VALIDATION_ERROR", {field + ".id": "UUID 형식이어야 합니다."})
+        if item_id in seen: _fail(400, "VALIDATION_ERROR", {field + ".id": "중복 UUID입니다."})
+        seen.add(item_id)
+        kind, scope = item["kind"], item["scope"]
+        if not isinstance(kind, str) or kind not in {"lodging", "appointment"} or (scope is not None and (not isinstance(scope, str) or scope not in {"personal", "group"})):
+            _fail(400, "VALIDATION_ERROR", {field: "종류와 범위를 확인해 주세요."})
+        if not isinstance(item["placeQuery"], str):
+            _fail(400, "VALIDATION_ERROR", {field + ".placeQuery": "문자열을 입력해 주세요."})
+        query = "" if item["placeQuery"] == "" else _text(item["placeQuery"], field + ".placeQuery", 200) or ""
+        cid = item["contentid"]
+        if cid is not None and (isinstance(cid, bool) or not isinstance(cid, int) or not -(2**31) <= cid <= 2**31 - 1):
+            _fail(400, "VALIDATION_ERROR", {field + ".contentid": "정수 또는 null을 입력해 주세요."})
+        values = {}
+        for name in ("date", "endDate"):
+            values[name] = _date(item[name], field + "." + name)
+        if values["date"] and values["endDate"] and values["endDate"] < values["date"]:
+            _fail(400, "VALIDATION_ERROR", {field + ".endDate": "시작일 이후 날짜를 입력해 주세요."})
+        for name in ("time", "endTime"):
+            rawtime = item[name]
+            if rawtime is not None and (not isinstance(rawtime, str) or not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", rawtime)):
+                _fail(400, "VALIDATION_ERROR", {field + "." + name: "HH:MM 시각을 입력해 주세요."})
+            values[name] = rawtime
+        # A draft keeps independently known checkout/end values. Missing start
+        # values are clarified on the same form rather than invalidating AI output.
+        clean_items.append({"id": item_id, "kind": kind, "scope": scope, "placeQuery": query,
+                            "contentid": cid, **values})
+    out["scheduleItems"] = clean_items
     return out
 
 
@@ -127,15 +183,16 @@ def _json(value: Any) -> Any:
 
 
 def _initial_conditions() -> dict[str, Any]:
-    return {key: None for key in CONDITION_KEYS}
+    return {**{key: None for key in CONDITION_KEYS}, "departureTime": "09:00"}
 
 
 def _initial_draft() -> dict[str, Any]:
-    return {"originalText": None, "likes": None, "avoid": None, "avoidImportance": "required", "food": None, "foodImportance": "preferred", "walking": None}
+    return {"originalText": None, "likes": None, "avoid": None, "avoidImportance": "required", "food": None, "foodImportance": "preferred", "walking": None, "scheduleItems": []}
 
 
 def _response(row: Any, conditions_version: int) -> dict[str, Any]:
     draft = _json(row["draft_json"]) if row else _initial_draft()
+    draft.setdefault("scheduleItems", [])
     version = int(row["preference_version"]) if row else 0
     confirmed = bool(row and row["confirmed_at"] is not None and row["confirmed_conditions_version"] == conditions_version and row["confirmed_preference_version"] == version)
     return {
@@ -187,11 +244,53 @@ def _access(conn, request: Request, trip_id: str, find_session: Callable, cookie
 
 def _conditions(conn, trip_id: str):
     row = conn.execute(text("SELECT conditions_json,conditions_version FROM trip_preparation_documents WHERE trip_id=:t"), {"t": trip_id}).mappings().first()
-    return (_json(row["conditions_json"]), int(row["conditions_version"])) if row else (_initial_conditions(), 0)
+    if not row: return _initial_conditions(), 0
+    conditions = _json(row["conditions_json"])
+    conditions.setdefault("departureTime", "09:00")
+    conditions.setdefault("departureContentid", None)
+    return conditions, int(row["conditions_version"])
 
 
 def _personal(conn, trip_id: str, member_id: str):
     return conn.execute(text("SELECT draft_json,preference_version,confirmed_conditions_version,confirmed_preference_version,confirmed_at FROM member_preparation_documents WHERE trip_id=:t AND member_id=:m FOR UPDATE"), {"t": trip_id, "m": member_id}).mappings().first()
+
+
+def _schedule_clarifications(conn, items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Resolve only exact catalog matches and return private correction DTOs."""
+    resolved, clarifications = [], []
+    for original in items:
+        item = dict(original)
+        if item["contentid"] is not None:
+            rows = conn.execute(text("SELECT contentid,title,addr1 FROM places WHERE contentid=:id"), {"id": item["contentid"]}).mappings().all()
+            candidates = rows
+        else:
+            rows = conn.execute(text("SELECT contentid,title,addr1 FROM places WHERE title=:q OR addr1=:q ORDER BY contentid LIMIT 3"), {"q": item["placeQuery"]}).mappings().all()
+            candidates = [r for r in rows if item["placeQuery"] in {r["title"], r["addr1"]}]
+        item["contentid"] = candidates[0]["contentid"] if len(candidates) == 1 else None
+        resolved.append(item)
+        fields = []
+        if item["contentid"] is None: fields.append("placeQuery")
+        if item["scope"] is None: fields.append("scope")
+        if item["kind"] == "lodging" and item["date"] is None: fields.append("date")
+        if item["kind"] == "appointment":
+            if item["date"] is None: fields.append("date")
+            if item["time"] is None: fields.append("time")
+            if item.get("endDate") and item.get("date") and item["endDate"] != item["date"]:
+                fields.append("endDate")
+        if fields:
+            clarifications.append({"itemId": item["id"], "fields": fields,
+                                  "code": "SCHEDULE_ITEM_CLARIFICATION_REQUIRED",
+                                  "candidates": [{"contentid": r["contentid"], "title": r["title"], "address": r["addr1"]} for r in candidates]})
+    return resolved, clarifications
+
+
+def _member_safe_suggestions(suggestions: dict[str, Any], role: str) -> dict[str, Any]:
+    """Do not let model output promote a member's private request to group scope."""
+    if role == "OWNER":
+        return suggestions
+    return {**suggestions, "scheduleItems": [
+        ({**item, "scope": None} if item.get("scope") == "group" else item)
+        for item in suggestions.get("scheduleItems", [])]}
 
 
 def _api_error(exc: PrepFailure, ApiError):
@@ -288,6 +387,9 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
         conditions = _validated(lambda: validate_conditions(body["conditions"]), ApiError)
         def action(conn):
             _, _, _member = _access(conn, request, trip_id, find_session, cookie_name, owner=True)
+            if conditions["departureContentid"] is not None:
+                place = conn.execute(text("SELECT contentid FROM places WHERE contentid=:id"), {"id": conditions["departureContentid"]}).first()
+                if not place: _fail(400, "VALIDATION_ERROR", {"conditions.departureContentid": "장소를 확인해 주세요."})
             current, version = _conditions(conn, trip_id)
             if expected != version:
                 _fail(409, "VERSION_CONFLICT", conditions=version)
@@ -311,7 +413,11 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
             _, _, member = _access(conn, request, trip_id, find_session, cookie_name)
             _, conditions_version = _conditions(conn, trip_id)
             row = _personal(conn, trip_id, member["id"])
-            return _response(row, conditions_version)
+            dto = _response(row, conditions_version)
+            resolved, clarifications = _schedule_clarifications(conn, dto["draft"].get("scheduleItems", []))
+            dto["draft"]["scheduleItems"] = resolved
+            dto["clarifications"] = clarifications
+            return dto
         return success(execute(request, action), request)
 
     @app.put("/api/v1/trips/{trip_id}/preferences/me")
@@ -326,6 +432,13 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
         draft = _validated(lambda: validate_draft(body["draft"]), ApiError)
         def action(conn):
             _, _, member = _access(conn, request, trip_id, find_session, cookie_name)
+            group_scope_errors = {f"draft.scheduleItems.{index}.scope": "공통 일정은 방장만 지정할 수 있습니다."
+                                  for index, item in enumerate(draft["scheduleItems"])
+                                  if member["role"] != "OWNER" and item["scope"] == "group"}
+            if group_scope_errors:
+                _fail(400, "VALIDATION_ERROR", group_scope_errors)
+            resolved, _ = _schedule_clarifications(conn, draft["scheduleItems"])
+            draft["scheduleItems"] = resolved
             _, cv = _conditions(conn, trip_id)
             row = _personal(conn, trip_id, member["id"])
             pv = int(row["preference_version"]) if row else 0
@@ -363,9 +476,18 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
             if ec != cv or ep != pv:
                 _fail(409, "VERSION_CONFLICT", conditions=cv, preference=pv)
             draft = _json(row["draft_json"]) if row else _initial_draft()
+            draft.setdefault("scheduleItems", [])
+            group_scope_errors = {f"scheduleItems.{index}.scope": "공통 일정은 방장만 지정할 수 있습니다."
+                                  for index, item in enumerate(draft["scheduleItems"])
+                                  if member["role"] != "OWNER" and item.get("scope") == "group"}
+            if group_scope_errors:
+                _fail(400, "VALIDATION_ERROR", group_scope_errors)
             missing = [field for field in ("originalText", "likes") if not draft[field]]
             if draft["walking"] not in WALKING:
                 missing.append("walking")
+            resolved, clarifications = _schedule_clarifications(conn, draft.get("scheduleItems", []))
+            if clarifications:
+                missing.extend(f"scheduleItems.{item['itemId']}" for item in clarifications)
             if missing:
                 _fail(400, "PREFERENCES_INCOMPLETE", {field: "확정 전에 입력해 주세요." for field in missing})
             if row and row["confirmed_conditions_version"] == cv and row["confirmed_preference_version"] == pv and row["confirmed_at"] is not None:
@@ -440,7 +562,7 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
                     draft = _json(row["draft_json"]) if row else _initial_draft()
                     if not draft["originalText"]:
                         _fail(400, "ORIGINAL_TEXT_REQUIRED", {"originalText": "먼저 원문을 저장해 주세요."})
-                    return {"token": token, "session_id": session["id"], "member_id": member["id"], "conditions_version": cv, "preference_version": pv, "original_text": draft["originalText"], "conditions": conditions, "path": path}
+                    return {"token": token, "session_id": session["id"], "member_id": member["id"], "member_role": member["role"], "conditions_version": cv, "preference_version": pv, "original_text": draft["originalText"], "conditions": conditions, "path": path}
             except PrepFailure as exc:
                 _api_error(exc, ApiError)
         finally:
@@ -524,7 +646,14 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
         except ApiError:
             await run_in_threadpool(abandon_interpret, reservation)
             raise
+        validated["suggestions"] = _member_safe_suggestions(validated["suggestions"], reservation["member_role"])
         payload = {"sourceConditionsVersion": cv, "sourcePreferenceVersion": pv, **validated}
+        clarification_conn = engine.connect()
+        try:
+            _, payload["clarifications"] = _schedule_clarifications(clarification_conn, payload["suggestions"]["scheduleItems"])
+            clarification_conn.commit()
+        finally:
+            clarification_conn.close()
         return success(await run_in_threadpool(finish_interpret, request, trip_id, key, reservation, payload), request)
 
 
@@ -532,7 +661,25 @@ def _validate_interpret_result(result: Any, ApiError) -> dict[str, Any]:
     if not isinstance(result, dict) or set(result) != {"suggestions", "needsWalkingAnswer"} or not isinstance(result["needsWalkingAnswer"], bool):
         raise ApiError(502, "AI_INVALID_RESPONSE", "AI 응답을 처리하지 못했습니다.")
     try:
-        suggestions = validate_draft({"originalText": None, **_obj(result["suggestions"], SUGGESTION_KEYS, "suggestions")})
+        if not isinstance(result["suggestions"], dict):
+            raise PrepFailure(502, "AI_INVALID_RESPONSE")
+        raw = dict(result["suggestions"])
+        old_suggestion_keys = set(SUGGESTION_KEYS) - {"scheduleItems"}
+        if set(raw) == old_suggestion_keys:
+            raw["scheduleItems"] = []
+        elif set(raw) != set(SUGGESTION_KEYS):
+            raise PrepFailure(502, "AI_INVALID_RESPONSE")
+        if not isinstance(raw["scheduleItems"], list) or len(raw["scheduleItems"]) > 20:
+            raise PrepFailure(502, "AI_INVALID_RESPONSE")
+        items = []
+        expected_model_keys = SCHEDULE_ITEM_KEYS
+        legacy_model_keys = SCHEDULE_ITEM_KEYS - {"id", "contentid"}
+        for item in raw["scheduleItems"]:
+            if not isinstance(item, dict) or set(item) not in (expected_model_keys, legacy_model_keys):
+                raise PrepFailure(502, "AI_INVALID_RESPONSE")
+            items.append({**item, "id": str(uuid.uuid4()), "contentid": None})
+        raw["scheduleItems"] = items
+        suggestions = validate_draft({"originalText": None, **raw})
     except PrepFailure:
         raise ApiError(502, "AI_INVALID_RESPONSE", "AI 응답을 처리하지 못했습니다.") from None
     if result["needsWalkingAnswer"] != (suggestions["walking"] is None):

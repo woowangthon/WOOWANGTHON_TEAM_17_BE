@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
 
-from . import canvas_models, canvas_recommendation, preparation
+from . import canvas_import, canvas_models, canvas_recommendation, preparation
 from .candidate_selection import _tokens_region
 from .canvas_models import CanvasValidationError
 from .canvas_store import CanvasStore, CanvasStoreError
@@ -262,7 +262,7 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
     async def put_canvas(trip_id: str, request: Request):
         trip_id = parse_trip(trip_id)
         origin_check(request)
-        if len(await request.body()) > 210 * 1024:
+        if len(await request.body()) > canvas_models.MAX_DOCUMENT_BYTES + 1024:
             raise ApiError(400, "VALIDATION_ERROR", "캔버스 문서를 확인해 주세요.")
         body = await body_json(request, {"expectedRevision", "document"})
         if set(body) != {"expectedRevision", "document"} or isinstance(body.get("expectedRevision"), bool) or not isinstance(body.get("expectedRevision"), int) or not 0 <= body["expectedRevision"] <= 4_294_967_295:
@@ -288,6 +288,11 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
                     if "replay" in reservation:
                         result = reservation["replay"]
                     else:
+                        existing = store.load_document(conn, trip_id)
+                        try:
+                            canvas_import.validate_managed_nodes(conn, trip_id, document, existing["document"] if existing else None)
+                        except canvas_import.CanvasImportError as exc:
+                            raise CanvasError(exc.code, exc.status) from None
                         try:
                             ids = [n["contentid"] for n in document["nodes"] if n["kind"] == "place"]
                             _place_details(conn, ids)
@@ -310,6 +315,90 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
             finally:
                 conn.close()
         return await run_in_threadpool(persist)
+
+    @app.post("/api/v1/trips/{trip_id}/plans/{plan_id}/canvas")
+    async def import_plan_canvas(trip_id: str, plan_id: str, request: Request):
+        trip_id = parse_trip(trip_id)
+        try:
+            plan_id = canvas_models.canonical_uuid(plan_id)
+        except CanvasValidationError:
+            raise ApiError(400, "VALIDATION_ERROR", "일정을 확인해 주세요.") from None
+        origin_check(request)
+        if len(await request.body()) > 4096:
+            raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.")
+        body = await body_json(request, {"versionId", "expectedCanvasRevision"})
+        try:
+            if set(body) != {"versionId", "expectedCanvasRevision"}:
+                raise CanvasValidationError
+            version_id = canvas_models.canonical_uuid(body["versionId"])
+            revision = body["expectedCanvasRevision"]
+            if type(revision) is not int or not 0 <= revision <= 4_294_967_295:
+                raise CanvasValidationError
+        except (CanvasValidationError, KeyError, TypeError):
+            raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.") from None
+        key = request_key(request)
+        path = f"/api/v1/trips/{trip_id}/plans/{plan_id}/canvas"
+        fingerprint = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+        def persist_import():
+            from .generation_service import ServiceError
+            conn = engine.connect()
+            try:
+                with conn.begin():
+                    session, _, member = _access(conn, request, trip_id, find_session, cookie_name)
+                    if member["role"] != "OWNER":
+                        raise CanvasError("OWNER_REQUIRED", 403)
+                    service = getattr(app.state, "generation_service", None)
+                    if service is None:
+                        raise CanvasError("GENERATION_UNAVAILABLE", 503)
+                    # The service rechecks authority, source/catalog/settings and
+                    # locks the plan version in THIS transaction, without a commit.
+                    record = service.current_plan_for_canvas(conn, request, trip_id, plan_id, version_id)
+                    public_plan = record.get("public", record)
+                    payload = canvas_import.load_import_payload(conn, trip_id, plan_id, version_id)
+                    lease = str(uuid.uuid4())
+                    reservation = store.reserve_request(conn, session_id=session["id"], trip_id=trip_id, member_id=member["id"],
+                                                        kind="SAVE", method="POST", path=path, key=key,
+                                                        fingerprint=fingerprint, lease_token=lease)
+                    if "replay" in reservation:
+                        result = reservation["replay"]
+                    else:
+                        current = store.load_document(conn, trip_id)
+                        marker = payload.get("_canvasImport") or {}
+                        if marker.get("tripId") == trip_id:
+                            # Reopening a version never restores nodes deleted by a
+                            # collaborator. Return the latest shared document.
+                            result = public_state(conn, trip_id, current)
+                        else:
+                            actual_revision = current["revision"] if current else 0
+                            if actual_revision != revision:
+                                raise CanvasError("VERSION_CONFLICT", 409)
+                            base = current["document"] if current else _day_document(conn, trip_id)
+                            document = canvas_import.append_generated_plan(base, trip_id, plan_id, version_id, public_plan["document"])
+                            _place_details(conn, [node["contentid"] for node in document["nodes"] if node["kind"] == "place"])
+                            saved = store.save_document(conn, trip_id, revision, document,
+                                                        source_plan={"planId": plan_id, "versionId": version_id})
+                            canvas_import.mark_imported(conn, trip_id, plan_id, version_id, payload, saved["revision"])
+                            result = public_state(conn, trip_id, saved)
+                        store.complete_request(conn, session_id=session["id"], method="POST", path=path, key=key,
+                                               lease_token=lease, result=result)
+                return success(result, request)
+            except ServiceError as exc:
+                conn.rollback()
+                raise ApiError(exc.status, exc.code, "일정 상태를 다시 확인해 주세요.", retry=exc.retry) from None
+            except (CanvasError, canvas_import.CanvasImportError) as exc:
+                conn.rollback()
+                raise ApiError(exc.status, exc.code, "일정을 캔버스로 옮기지 못했습니다.", retry=getattr(exc, "retry", None)) from None
+            except CanvasStoreError as exc:
+                conn.rollback()
+                translated = _translate_store(exc)
+                raise ApiError(translated.status, translated.code, "캔버스 상태를 다시 확인해 주세요.", retry=translated.retry) from None
+            except Exception:
+                conn.rollback()
+                raise ApiError(503, "CANVAS_UNAVAILABLE", "일정을 캔버스로 옮기지 못했습니다.") from None
+            finally:
+                conn.close()
+        return await run_in_threadpool(persist_import)
 
     @app.get("/api/v1/trips/{trip_id}/canvas/places/{contentid}")
     def get_canvas_place(trip_id: str, contentid: str, request: Request):

@@ -59,16 +59,16 @@ def _confirmed_doc(row: Any, conditions_version: int) -> bool:
 
 
 def _clean_preference(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, dict) or set(raw) != set(preparation.PERSONAL_KEYS):
+    if not isinstance(raw, dict) or set(raw) not in (set(preparation.PERSONAL_KEYS), set(preparation.PERSONAL_KEYS) | {"scheduleItems"}):
         raise GenerationFoundationError("INVALID_PREPARATION_DOCUMENT")
     try:
-        clean = preparation.validate_draft(raw)
+        clean = preparation.validate_draft({**raw, "scheduleItems": raw.get("scheduleItems", [])})
     except preparation.PrepFailure:
         raise GenerationFoundationError("INVALID_PREPARATION_DOCUMENT") from None
     # Original prose is validated as stored but never copied into the capture.
     if not clean["originalText"]:
         raise GenerationFoundationError("PREPARATION_NOT_READY")
-    return {key: clean[key] for key in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking")}
+    return {key: clean[key] for key in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking", "scheduleItems")}
 
 
 def _capture(conn: Any, trip_id: str, authorize: Callable) -> ConfirmedPreparationSnapshot:
@@ -116,7 +116,7 @@ def _capture(conn: Any, trip_id: str, authorize: Callable) -> ConfirmedPreparati
             if not pref["likes"] or pref["walking"] not in preparation.WALKING:
                 raise GenerationFoundationError("PREPARATION_NOT_READY")
             prefs.append({"memberRef": f"p{index}", **pref})
-            versions.append({"memberId": mid, "preferenceVersion": int(doc["preference_version"]),
+            versions.append({"memberId": mid, "role": str(member["role"]), "preferenceVersion": int(doc["preference_version"]),
                              "confirmedConditionsVersion": int(doc["confirmed_conditions_version"]),
                              "confirmedPreferenceVersion": int(doc["confirmed_preference_version"])})
 

@@ -18,7 +18,7 @@ from typing import Any, Callable
 from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
 
-from . import generation_foundation as foundation, generation_reviews, place_catalog, preparation
+from . import confirmed_preferences, generation_foundation as foundation, generation_reviews, place_catalog, preparation
 
 
 class ServiceError(Exception):
@@ -87,49 +87,65 @@ class GenerationService:
     @staticmethod
     def _common_ready(conditions, settings):
         reviewed = {x.get("field"): x for x in settings.get("reviewedCommonFields", []) if isinstance(x, dict)}
-        return all(not conditions.get(field) or (reviewed.get(field, {}).get("reviewed") is True
-                    and bool(reviewed.get(field, {}).get("anchors"))) for field in ("lodging", "fixedSchedule"))
+        return all(not conditions.get(field) or bool(reviewed.get(field, {}).get("anchors"))
+                   for field in ("lodging", "fixedSchedule"))
 
     def _source_token(self, conn, trip_id, cv, catalog_digest, settings_version):
         members = conn.execute(text("SELECT id,nickname FROM trip_members WHERE trip_id=:t AND status='ACTIVE' ORDER BY CASE WHEN role='OWNER' THEN 0 ELSE 1 END,created_at,id FOR UPDATE"), {"t": trip_id}).mappings().all()
         docs = conn.execute(text("SELECT member_id,draft_json,preference_version,confirmed_conditions_version,confirmed_preference_version,confirmed_at FROM member_preparation_documents WHERE trip_id=:t FOR UPDATE"), {"t": trip_id}).mappings().all()
         docmap = {str(r["member_id"]): r for r in docs}
-        reviews = conn.execute(text("SELECT member_id,conditions_version,preference_version,catalog_digest,source_fingerprint,normalization_digest,normalization_json,review_version,review_json FROM generation_member_reviews WHERE trip_id=:t FOR UPDATE"), {"t": trip_id}).mappings().all()
-        revmap = {str(r["member_id"]): r for r in reviews}
         personal = []
         statuses = []
         for m in members:
-            mid = str(m["id"]); d = docmap.get(mid); r = revmap.get(mid)
+            mid = str(m["id"]); d = docmap.get(mid)
             confirmed = bool(d and d["confirmed_at"] and int(d["confirmed_conditions_version"] or 0) == cv and int(d["confirmed_preference_version"] or 0) == int(d["preference_version"]))
-            current_review = bool(r and int(r["conditions_version"]) == cv and int(r["preference_version"]) == int(d["preference_version"] if d else -1) and r["catalog_digest"] == catalog_digest and r["source_fingerprint"])
             source_document_digest = None
+            schedule_ready = True
             if d:
                 try:
-                    source_document_digest = hashlib.sha256(_canonical(preparation.validate_draft(_json(d["draft_json"]))).encode()).hexdigest()
+                    draft = preparation.validate_draft({**_json(d["draft_json"]), "scheduleItems": _json(d["draft_json"]).get("scheduleItems", [])})
+                    source_document_digest = hashlib.sha256(_canonical(draft).encode()).hexdigest()
+                    _, unresolved = preparation._schedule_clarifications(conn, draft["scheduleItems"])
+                    schedule_ready = not unresolved
                 except Exception:
                     source_document_digest = "invalid"
-            normalization_id = None
-            if current_review:
-                try:
-                    normalization_doc = _json(r["normalization_json"])
-                    normalization_id = normalization_doc.get("id")
-                    if normalization_doc.get("sourceDocumentDigest") != source_document_digest: current_review = False
-                except Exception: current_review = False
-            private_review = _json(r["review_json"]) if current_review and r["review_json"] else None
-            reviewed = bool(current_review and private_review and private_review.get("ready") is True)
-            status = "reviewed" if reviewed else "reviewNeeded" if confirmed else "stale"
+                    schedule_ready = False
+            status = "confirmed" if confirmed else "writing"
             statuses.append({"id": mid, "nickname": m["nickname"], "status": status})
             personal.append({"memberId": mid, "preferenceVersion": int(d["preference_version"]) if d else 0,
                              "confirmed": confirmed,
                              "confirmedConditionsVersion": int(d["confirmed_conditions_version"]) if d and d["confirmed_conditions_version"] is not None else None,
                              "confirmedPreferenceVersion": int(d["confirmed_preference_version"]) if d and d["confirmed_preference_version"] is not None else None,
-                             "reviewVersion": int(r["review_version"]) if current_review else 0,
-                             "normalizationId": normalization_id if current_review else None,
-                             "sourceDocumentDigest": source_document_digest,
-                             "normalizationDigest": r["normalization_digest"] if current_review else None,
-                             "reviewed": reviewed})
-        stamp = {"conditionsVersion": cv, "members": personal, "settingsVersion": settings_version, "catalogDigest": catalog_digest}
+                             "sourceDocumentDigest": source_document_digest, "scheduleReady": schedule_ready})
+        stamp = {"policyVersion": confirmed_preferences.POLICY_VERSION, "conditionsVersion": cv,
+                 "members": personal, "settingsVersion": settings_version, "catalogDigest": catalog_digest}
         return hashlib.sha256(_canonical(stamp).encode()).hexdigest(), statuses, personal
+
+    def _confirmed_issues(self, conn, trip_id, catalog, common_settings=None):
+        from .candidate_selection import build_supported_tags
+        members = conn.execute(text("SELECT id,role FROM trip_members WHERE trip_id=:t AND status='ACTIVE' ORDER BY created_at,id FOR UPDATE"), {"t": trip_id}).mappings().all()
+        docs = conn.execute(text("SELECT member_id,draft_json FROM member_preparation_documents WHERE trip_id=:t FOR UPDATE"), {"t": trip_id}).mappings().all()
+        by_member = {str(r["member_id"]): r for r in docs}
+        tags = build_supported_tags(catalog)
+        issues = set()
+        for member in members:
+            doc = by_member.get(str(member["id"]))
+            if not doc: continue
+            try:
+                draft = preparation.validate_draft({**_json(doc["draft_json"]), "scheduleItems": _json(doc["draft_json"]).get("scheduleItems", [])})
+            except Exception:
+                issues.add("PREPARATION_NOT_READY"); continue
+            if member["role"] != "OWNER" and any(item["scope"] == "group" for item in draft["scheduleItems"]):
+                issues.add("SCHEDULE_SCOPE_INVALID")
+            pref = {"memberRef": "p1", **{k: draft[k] for k in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking", "scheduleItems")}}
+            if member["role"] == "OWNER":
+                try:
+                    confirmed_preferences.group_schedule_anchors([pref], common_settings, {"members": [{"memberId": member["id"], "role": "OWNER"}]})
+                except ValueError:
+                    issues.add("SCHEDULE_ITEM_CLARIFICATION_REQUIRED")
+            issues.update(item["code"] for item in confirmed_preferences.analyze_preferences([pref], tags)["issues"]
+                          if item["code"].startswith("REQUIRED_"))
+        return sorted(issues)
 
     def _snapshot(self, conn, request, trip_id):
         # `_capture` uses the established trip -> membership -> member/doc lock order.
@@ -158,10 +174,14 @@ class GenerationService:
                 ready = False; reasons.append({"code": "MEMBER_COUNT_MISMATCH"})
             if not all(x["confirmed"] for x in personal):
                 ready = False; reasons.append({"code": "PREFERENCES_UNCONFIRMED"})
-            if not all(x["reviewed"] for x in personal):
-                ready = False; reasons.append({"code": "REVIEW_REQUIRED"})
+            if not all(x["scheduleReady"] for x in personal):
+                ready = False; reasons.append({"code": "SCHEDULE_ITEM_CLARIFICATION_REQUIRED"})
+            for issue in self._confirmed_issues(conn, trip_id, catalog, settings):
+                ready = False; reasons.append({"code": issue})
             if not self._common_ready(conditions, settings):
-                ready = False; reasons.append({"code": "COMMON_REVIEW_REQUIRED"})
+                ready = False
+                reasons.extend({"code": "LODGING_ANCHOR_REQUIRED" if field == "lodging" else "FIXED_SCHEDULE_ANCHOR_REQUIRED"}
+                               for field in ("lodging", "fixedSchedule") if conditions.get(field))
             latest = conn.execute(text("SELECT id,status,phase,plan_id,version_id,error_code,created_at,updated_at FROM generation_jobs WHERE trip_id=:t AND kind='GENERATE' ORDER BY created_at DESC LIMIT 1"), {"t": trip_id}).mappings().first()
             plan = None
             if latest and latest["plan_id"]:
@@ -169,7 +189,8 @@ class GenerationService:
                 if rec: plan = {"planId": rec["id"], "versionId": rec["version_id"], "status": rec["status"]}
             conn.commit()
             return {"conditionsVersion": cv, "inputToken": token, "settingsVersion": sv, "settings": settings,
-                    "reviewMembers": statuses, "readyForGeneration": bool(ready and actor["role"] == "OWNER"),
+                    "preparationMembers": statuses, "reviewMembers": statuses,
+                    "readyForGeneration": bool(ready and actor["role"] == "OWNER"),
                     "reasons": reasons, "latestJob": self._job_public(latest) if latest else None, "latestPlan": plan}
         except ServiceError:
             conn.rollback(); raise
@@ -194,7 +215,7 @@ class GenerationService:
         draft = preparation.validate_draft(_json(row["draft_json"]))
         if not draft["originalText"]:
             raise ServiceError("PREFERENCES_UNCONFIRMED", 409)
-        prefs = [{"memberRef": "p1", **{k: draft[k] for k in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking")}}]
+        prefs = [{"memberRef": "p1", **{k: draft[k] for k in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking", "scheduleItems")}}]
         identity = {"tripId": trip_id, "sessionId": session["id"], "actorMemberId": member["id"],
                     "actorRole": member["role"], "conditionsVersion": cv,
                     "members": [{"memberId": member["id"], "preferenceVersion": int(row["preference_version"]),
@@ -217,7 +238,13 @@ class GenerationService:
             current = bool(row and int(row["conditions_version"]) == cv and int(row["preference_version"]) == pv and row["source_fingerprint"] == snapshot.fingerprint and row["catalog_digest"] == catalog.digest and _json(row["normalization_json"]).get("sourceDocumentDigest") == source_digest)
             conn.commit()
             dto = generation_reviews.normalization_dto(raw, review, version, current) if raw and current else {"normalization": None, "reviewVersion": version, "review": review if current else None, "stale": bool(row)}
-            return {"conditionsVersion": cv, "preferenceVersion": pv, "catalogDigest": catalog.digest, **dto}
+            from .candidate_selection import build_supported_tags
+            issues = confirmed_preferences.preference_issues(snapshot.confirmed_preferences(), build_supported_tags(catalog))
+            clarifications = []
+            if draft.get("scheduleItems"):
+                _, clarifications = preparation._schedule_clarifications(conn, draft["scheduleItems"])
+            return {"conditionsVersion": cv, "preferenceVersion": pv, "catalogDigest": catalog.digest,
+                    "preparationIssues": issues, "clarifications": clarifications, **dto}
         except (ValueError, ServiceError): conn.rollback(); raise
         except Exception: conn.rollback(); raise ServiceError("GENERATION_UNAVAILABLE", 503) from None
         finally: conn.close()
@@ -487,8 +514,13 @@ class GenerationService:
             sv, _ = self._settings(conn, trip_id, cv); token, statuses, personal = self._source_token(conn, trip_id, cv, catalog.digest, sv)
             if set(body) != {"expectedInputToken", "expectedSettingsVersion"} or body["expectedInputToken"] != token: raise ServiceError("STALE_GENERATION_INPUT")
             if body["expectedSettingsVersion"] != sv: raise ServiceError("VERSION_CONFLICT")
-            if (not personal or not all(x["confirmed"] for x in personal) or not all(x["reviewed"] for x in personal)
-                    or not self._common_ready(conditions, self._settings(conn, trip_id, cv)[1])): raise ServiceError("REVIEW_REQUIRED")
+            current_settings = self._settings(conn, trip_id, cv)[1]
+            if not personal or not all(x["confirmed"] for x in personal): raise ServiceError("PREFERENCES_UNCONFIRMED")
+            if not all(x["scheduleReady"] for x in personal): raise ServiceError("SCHEDULE_ITEM_CLARIFICATION_REQUIRED")
+            issues = self._confirmed_issues(conn, trip_id, catalog, current_settings)
+            if issues: raise ServiceError(issues[0])
+            if not self._common_ready(conditions, current_settings):
+                raise ServiceError("LODGING_ANCHOR_REQUIRED" if conditions.get("lodging") else "FIXED_SCHEDULE_ANCHOR_REQUIRED")
             path = f"/api/v1/trips/{trip_id}/generation/jobs"; fp = hashlib.sha256(_canonical(body).encode()).hexdigest()
             old = conn.execute(text("SELECT * FROM generation_jobs WHERE session_id=:s AND method='POST' AND path=:p AND idempotency_key=:k AND expires_at>:n FOR UPDATE"), {"s": session["id"], "p": path, "k": key, "n": _now()}).mappings().first()
             if old:
@@ -524,7 +556,9 @@ class GenerationService:
                        "CANDIDATE_REVIEW_REQUIRED": "REVIEW_REQUIRED", "AI_DRAFT_FAILED": "AI_UNAVAILABLE",
                        "AI_TIMEOUT": "AI_TIMEOUT", "AI_UNAVAILABLE": "AI_UNAVAILABLE",
                        "STALE_PLACE_CATALOG": "STALE_PLACE_CATALOG", "STALE_GENERATION_INPUT": "STALE_GENERATION_INPUT",
-                       "SOURCE_NO_LONGER_ACCESSIBLE": "STALE_GENERATION_INPUT"}
+                       "SOURCE_NO_LONGER_ACCESSIBLE": "STALE_GENERATION_INPUT",
+                       "REQUIRED_PREFERENCE_UNSUPPORTED": "REQUIRED_PREFERENCE_UNSUPPORTED",
+                       "REQUIRED_PREFERENCE_UNSATISFIED": "REQUIRED_PREFERENCE_UNSATISFIED"}
             if token: await run_in_threadpool(self._fail_job, job_id, mapping.get(code, "GENERATION_UNAVAILABLE"), token)
 
     def _claim_job(self, job_id, request):
@@ -547,7 +581,7 @@ class GenerationService:
 
     def _run_job_sync(self, job_id, request, token):
         from .generation_draft import generate_candidate_draft, GenerationDraftError
-        from .candidate_selection import build_candidate_selection
+        from .candidate_selection import build_confirmed_candidate_selection, build_supported_tags
         import asyncio
 
         job_id = str(uuid.UUID(job_id)); deadline = time.monotonic() + float(self.app.state.generation_job_timeout); conn = self._conn()
@@ -569,56 +603,20 @@ class GenerationService:
             input_token, _, member_stamps = self._source_token(conn, trip_id, snapshot.as_dict()["conditionsVersion"], catalog.digest, settings_version)
             if input_token != stamp.get("inputToken") or catalog.digest != stamp.get("catalogDigest"):
                 raise ServiceError("STALE_GENERATION_INPUT")
-            review_rows = conn.execute(text("SELECT member_id,normalization_json,normalization_digest,review_json FROM generation_member_reviews WHERE trip_id=:t FOR UPDATE"), {"t": trip_id}).mappings().all()
-            by_review = {str(r["member_id"]): r for r in review_rows}
-            doc = snapshot.as_dict(); identity = doc["_identity"]
+            doc = snapshot.as_dict()
             remapped_prefs = doc["confirmedPreferences"]
-            combined_terms, combined_unmapped, combined_walking = [], [], []
-            accepted_indexes, reviewed_fields = [], []
-            global_term_index = 0
-            for pindex, pref in enumerate(remapped_prefs, 1):
-                mid = str(identity["members"][pindex-1]["memberId"])
-                r = by_review.get(str(mid))
-                if not r or not r["review_json"]: raise ServiceError("REVIEW_REQUIRED")
-                stored = _json(r["normalization_json"]); review = _json(r["review_json"])
-                norm = stored.get("normalization")
-                if not isinstance(norm, dict): raise ServiceError("REVIEW_REQUIRED")
-                for term in norm.get("terms", []):
-                    item = dict(term); item["memberRef"] = f"p{pindex}"
-                    combined_terms.append(item)
-                for unmapped in norm.get("unmapped", []):
-                    item = dict(unmapped); item["memberRef"] = f"p{pindex}"
-                    combined_unmapped.append(item)
-                combined_walking.extend({**w, "memberRef": f"p{pindex}"} for w in norm.get("walking", []) if isinstance(w, dict))
-                own_ids = {f"t{i}": global_term_index+i for i in range(len(norm.get("terms", [])))}
-                for term_id in review.get("acceptedTermIds", []):
-                    if term_id in own_ids: accepted_indexes.append(own_ids[term_id])
-                for field in review.get("reviewedFields", []):
-                    field_terms = [own_ids[t] for t in field["termIds"] if t in own_ids]
-                    source_text = pref.get(field["field"]) or ""
-                    reviewed_fields.append({"memberRef": f"p{pindex}", "field": field["field"], "text": source_text,
-                                            "termIndexes": field_terms, "scope": field["scope"]})
-                global_term_index += len(norm.get("terms", []))
-            # Recompute provider-derived conflict hints over the combined group.
-            conflicts = []
-            by_tag = {}
-            for i, term in enumerate(combined_terms): by_tag.setdefault(term["tag"], []).append(i)
-            for tag, indexes in by_tag.items():
-                for pos, left_i in enumerate(indexes):
-                    for right_i in indexes[pos+1:]:
-                        left, right = combined_terms[left_i], combined_terms[right_i]
-                        if left["polarity"] == right["polarity"]: continue
-                        kind = "required_conflict" if left["importance"] == right["importance"] == "required" else "preference_conflict" if left["importance"] == right["importance"] == "preferred" else "mixed"
-                        conflicts.append({"tag": tag, "termIndexes": [left_i, right_i], "kind": kind, "requiresReview": True})
-            normalization = {"terms": combined_terms, "unmapped": combined_unmapped, "walking": combined_walking,
-                             "conflictCandidates": conflicts, "needsReview": bool(combined_terms or combined_unmapped or conflicts or any(p.get("walking") is None for p in remapped_prefs))}
-            common_review = self._common_review(snapshot.as_dict()["conditions"], gen_settings)
-            review = {"sourceFingerprint": snapshot.fingerprint,
-                      "normalizationDigest": __import__("app.candidate_selection", fromlist=["normalization_digest"]).normalization_digest(normalization),
-                      "catalogDigest": catalog.digest, "acceptedTermIndexes": accepted_indexes,
-                      "reviewedFields": reviewed_fields, "verifiedTagAbsences": [], "reviewedCommonFields": common_review}
-            selection = build_candidate_selection(snapshot, normalization, catalog, review)
-            if not selection.ready_for_draft: raise ServiceError("REVIEW_REQUIRED")
+            issues = self._confirmed_issues(conn, trip_id, catalog, gen_settings)
+            if issues: raise ServiceError(issues[0])
+            confirmed = confirmed_preferences.analyze_preferences(remapped_prefs, build_supported_tags(catalog))
+            gen_settings = {**gen_settings, "confirmedScheduleAnchors": confirmed_preferences.group_schedule_anchors(
+                remapped_prefs, gen_settings, doc.get("_identity"))}
+            hard_issue = next((x["code"] for x in confirmed["issues"] if x["code"].startswith("REQUIRED_")), None)
+            if hard_issue: raise ServiceError(hard_issue)
+            selection = build_confirmed_candidate_selection(snapshot, catalog, confirmed, gen_settings)
+            if not selection.ready_for_draft:
+                issues = selection.as_dict()["unresolvedRequired"]
+                code = next((x for x in issues if x.startswith("REQUIRED_PREFERENCE_")), "REQUIRED_PREFERENCE_UNSATISFIED")
+                raise ServiceError(code)
             conn.execute(text("UPDATE generation_jobs SET phase='generating' WHERE id=:id AND lease_token=:token"), {"id": job_id, "token": token}); conn.commit()
         except Exception:
             conn.rollback(); conn.close(); raise
@@ -631,9 +629,15 @@ class GenerationService:
                 try: return self._snapshot(c, request, trip_id)
                 finally: c.close()
             def reload_catalog(): return self._catalog()
-            return await generate_candidate_draft(snapshot, normalization, catalog, review, recapture, reload_catalog,
+            return await generate_candidate_draft(snapshot, None, catalog, None, recapture, reload_catalog,
+                                                   confirmed_evidence=confirmed, common_settings=gen_settings,
                                                    drafter=self.app.state.generation_drafter, timeout_seconds=60)
         draft = asyncio.run(callbacks()).as_dict()
+        from .confirmed_schedule import arrange_overnight_stops
+        try:
+            draft, gen_settings = arrange_overnight_stops(draft, gen_settings)
+        except ValueError:
+            raise ServiceError("SCHEDULE_ITEM_CLARIFICATION_REQUIRED") from None
         if time.monotonic() >= deadline: raise ServiceError("AI_TIMEOUT", 504)
         conn = self._conn()
         try:
@@ -666,7 +670,7 @@ class GenerationService:
             if time.monotonic() >= deadline: raise ServiceError("AI_TIMEOUT", 504)
             source_stamp = {"inputToken": current_token, "conditionsVersion": latest.as_dict()["conditionsVersion"],
                             "settingsVersion": sv, "catalogDigest": current_catalog.digest,
-                            "memberVersions": member_stamps, "reviewVersions": {x["memberId"]: x["reviewVersion"] for x in member_stamps}}
+                            "memberVersions": member_stamps}
             record = plan_store.create_generated_plan(conn, trip_id, actor["id"], snapshot, document, source_stamp)
             if time.monotonic() >= deadline: raise ServiceError("AI_TIMEOUT", 504)
             pub = record["public"]
@@ -694,7 +698,7 @@ class GenerationService:
     def _fail_job(self, job_id, code, token):
         conn = self._conn()
         try:
-            safe = code if code in {"STALE_GENERATION_INPUT", "STALE_PLACE_CATALOG", "REVIEW_REQUIRED", "PROCESS_INTERRUPTED", "AI_TIMEOUT", "AI_UNAVAILABLE", "AI_INVALID_RESPONSE", "VALIDATION_FAILED"} else "GENERATION_UNAVAILABLE"
+            safe = code if code in {"STALE_GENERATION_INPUT", "STALE_PLACE_CATALOG", "REVIEW_REQUIRED", "PROCESS_INTERRUPTED", "AI_TIMEOUT", "AI_UNAVAILABLE", "AI_INVALID_RESPONSE", "VALIDATION_FAILED", "REQUIRED_PREFERENCE_UNSUPPORTED", "REQUIRED_PREFERENCE_UNSATISFIED", "PREFERENCES_UNCONFIRMED", "SCHEDULE_ITEM_CLARIFICATION_REQUIRED", "LODGING_ANCHOR_REQUIRED", "FIXED_SCHEDULE_ANCHOR_REQUIRED"} else "GENERATION_UNAVAILABLE"
             status = "STALE" if safe.startswith("STALE_") else "FAILED"
             conn.execute(text("UPDATE generation_jobs SET status=:status,phase='failed',error_code=:code,lease_expires_at=:n WHERE id=:id AND status='RUNNING' AND lease_token=:token"), {"status": status, "code": safe, "n": _now(), "id": job_id, "token": token}); conn.commit()
         finally: conn.close()
@@ -737,6 +741,35 @@ class GenerationService:
         except ServiceError: conn.rollback(); raise
         except Exception: conn.rollback(); raise ServiceError("GENERATION_UNAVAILABLE", 503) from None
         finally: conn.close()
+
+    def current_plan_for_canvas(self, conn, request, trip_id, plan_id, version_id):
+        """Return a source-current active plan while the caller holds this connection.
+
+        Canvas import calls this inside its own save transaction so authorization,
+        plan version, catalog digest, and source token are checked atomically with
+        the canvas CAS write.
+        """
+        self._auth(conn, request, trip_id, owner=True)
+        plan = conn.execute(text("SELECT id,COALESCE(active_draft_id,current_version_id) AS current_version_id FROM plans WHERE id=:p AND trip_id=:t FOR UPDATE"),
+                            {"p": plan_id, "t": trip_id}).mappings().first()
+        if not plan: raise ServiceError("PLAN_NOT_FOUND", 404)
+        locked_version = conn.execute(text("SELECT id FROM plan_versions WHERE id=:v AND plan_id=:p AND trip_id=:t FOR UPDATE"),
+                                      {"v": version_id, "p": plan_id, "t": trip_id}).first()
+        if not locked_version or plan["current_version_id"] != version_id:
+            raise ServiceError("PLAN_STALE")
+        from . import plan_store
+        record = plan_store.get_plan_record(conn, trip_id, plan_id)
+        if not record or record["public"]["versionId"] != version_id:
+            raise ServiceError("PLAN_STALE")
+        catalog = place_catalog.load_place_catalog(conn, lock=True)
+        _, cv = preparation._conditions(conn, trip_id)
+        settings_version, _ = self._settings(conn, trip_id, cv)
+        current, _, _ = self._source_token(conn, trip_id, cv, catalog.digest, settings_version)
+        if record.get("sourceStamp", {}).get("inputToken") != current or record.get("sourceStamp", {}).get("catalogDigest") != catalog.digest:
+            raise ServiceError("PLAN_STALE")
+        if record["public"].get("status") not in {"DRAFT", "SAVED"}:
+            raise ServiceError("PLAN_STALE")
+        return record["public"]
 
     def save_plan(self, request, trip_id, plan_id, body, key):
         from . import plan_store

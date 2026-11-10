@@ -5,7 +5,7 @@ import json
 import math
 import re
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 
@@ -18,6 +18,21 @@ INTENTS = {"route", "candidate"}
 DAY_KEYS = {"id", "date"}
 EDGE_KEYS = {"id", "source", "target"}
 COMMON_NODE_KEYS = {"id", "kind", "dayId", "position", "color"}
+MAX_NODES = 500
+MAX_EDGES = 500
+MAX_DOCUMENT_BYTES = 1024 * 1024
+
+
+def _timestamp(value):
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?Z", value):
+        raise CanvasValidationError("UTC timestamp required")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise CanvasValidationError("UTC timestamp required") from None
+    return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def canonical_uuid(value: Any) -> str:
@@ -48,13 +63,13 @@ def validate_document(document: Any) -> dict[str, Any]:
         encoded = json.dumps(document, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
     except (TypeError, ValueError, UnicodeEncodeError):
         raise CanvasValidationError("invalid JSON") from None
-    if len(encoded) > 200 * 1024:
+    if len(encoded) > MAX_DOCUMENT_BYTES:
         raise CanvasValidationError("document too large")
     if (not isinstance(document, dict) or set(document) != {"schemaVersion", "days", "nodes", "edges"}
             or type(document["schemaVersion"]) is not int or document["schemaVersion"] != 3):
         raise CanvasValidationError("invalid document shape")
     days, nodes, edges = document["days"], document["nodes"], document["edges"]
-    if not isinstance(days, list) or not 1 <= len(days) <= 31 or not isinstance(nodes, list) or len(nodes) > 100 or not isinstance(edges, list) or len(edges) > 100:
+    if not isinstance(days, list) or not 1 <= len(days) <= 31 or not isinstance(nodes, list) or len(nodes) > MAX_NODES or not isinstance(edges, list) or len(edges) > MAX_EDGES:
         raise CanvasValidationError("document limits exceeded")
     day_ids: set[str] = set()
     dates: set[str] = set()
@@ -86,6 +101,8 @@ def validate_document(document: Any) -> dict[str, Any]:
             raise CanvasValidationError("invalid node")
         kind = node.get("kind")
         expected = COMMON_NODE_KEYS | ({"contentid", "intent"} if kind == "place" else {"text"} if kind == "comment" else set())
+        if kind == "place" and ("source" in node or "schedule" in node):
+            expected |= {"source", "schedule"}
         if set(node) != expected or not isinstance(kind, str) or kind not in {"place", "comment"}:
             raise CanvasValidationError("invalid node fields")
         node_id = canonical_uuid(node["id"])
@@ -110,6 +127,17 @@ def validate_document(document: Any) -> dict[str, Any]:
             if isinstance(contentid, bool) or not isinstance(contentid, int) or not -(2**31) <= contentid <= 2**31 - 1 or not isinstance(node["intent"], str) or node["intent"] not in INTENTS:
                 raise CanvasValidationError("invalid place node")
             clean.update(contentid=contentid, intent=node["intent"])
+            if "source" in node:
+                source, schedule = node["source"], node["schedule"]
+                if not isinstance(source, dict) or set(source) != {"planId", "versionId", "nodeId"}:
+                    raise CanvasValidationError("invalid source")
+                if not isinstance(schedule, dict) or set(schedule) != {"startAt", "endAt", "locked"} or type(schedule["locked"]) is not bool:
+                    raise CanvasValidationError("invalid schedule")
+                source = {key: canonical_uuid(value) for key, value in source.items()}
+                start, end = _timestamp(schedule["startAt"]), _timestamp(schedule["endAt"])
+                if start and end and end < start:
+                    raise CanvasValidationError("invalid schedule interval")
+                clean.update(source=source, schedule={"startAt": start, "endAt": end, "locked": schedule["locked"]})
         else:
             clean["text"] = _text(node["text"], 1, 1000, multiline=True)
             if not clean["text"].strip():

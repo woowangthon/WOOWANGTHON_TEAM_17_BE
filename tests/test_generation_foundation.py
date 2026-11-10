@@ -61,7 +61,7 @@ def test_capture_omits_original_text_and_detaches_preferences():
     snapshot = capture_confirmed_preparation(engine, "trip-1", authorize)
     prefs = snapshot.confirmed_preferences()
     assert prefs == [{"memberRef": "p1", "likes": "산책", "avoid": None, "avoidImportance": "required",
-                      "food": None, "foodImportance": "preferred", "walking": "20"}]
+                      "food": None, "foodImportance": "preferred", "walking": "20", "scheduleItems": []}]
     assert "비밀 원문" not in repr(snapshot)
     prefs[0]["likes"] = "mutated"
     assert snapshot.confirmed_preferences()[0]["likes"] == "산책"

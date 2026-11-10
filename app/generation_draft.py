@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Callable
 
-from .candidate_selection import build_candidate_selection
+from .candidate_selection import build_candidate_selection, build_confirmed_candidate_selection
 
 
 class GenerationDraftError(Exception):
@@ -105,6 +105,7 @@ def _ai_error_code(exc: Exception) -> str:
 
 async def generate_candidate_draft(snapshot, normalization_result, catalog, review, recapture: Callable,
                                    reload_catalog: Callable, *, policy=None, drafter=None,
+                                   confirmed_evidence=None, common_settings=None,
                                    max_visits_per_day: int = 8, timeout_seconds: float = 60) -> CandidateDraft:
     """Select internally, check freshness before/after provider, and return a proposal.
 
@@ -120,7 +121,9 @@ async def generate_candidate_draft(snapshot, normalization_result, catalog, revi
     deadline = loop.time() + timeout_seconds
     dates = _trip_dates(snapshot)
     # Rebuild from bound source/review data; never trust an external readiness flag.
-    selection = build_candidate_selection(snapshot, normalization_result, catalog, review, policy)
+    selection = (build_confirmed_candidate_selection(snapshot, catalog, confirmed_evidence, common_settings, policy)
+                 if confirmed_evidence is not None
+                 else build_candidate_selection(snapshot, normalization_result, catalog, review, policy))
     if not selection.ready_for_draft:
         raise GenerationDraftError("CANDIDATE_REVIEW_REQUIRED")
     candidates, fixed_visits = selection.draft_candidates(), selection.fixed_visits()

@@ -44,7 +44,9 @@ class CanvasStore:
                 "updatedAt": row["updated_at"]}
 
     def save_document(self, conn, trip_id: str, expected_revision: int, document: dict, *, source_plan=None):
-        existing = conn.execute(text("SELECT revision FROM trip_canvas_documents WHERE trip_id=:t"), {"t": trip_id}).first()
+        existing = conn.execute(text("SELECT revision,source_plan_id,source_version_id FROM trip_canvas_documents WHERE trip_id=:t"), {"t": trip_id}).mappings().first()
+        if existing and source_plan is None and existing["source_plan_id"] and existing["source_version_id"]:
+            source_plan = {"planId": existing["source_plan_id"], "versionId": existing["source_version_id"]}
         now = _now()
         encoded = json.dumps(document, ensure_ascii=False, separators=(",", ":"))
         if existing is None:
