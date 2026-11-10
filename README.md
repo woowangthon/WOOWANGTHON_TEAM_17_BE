@@ -52,6 +52,8 @@ AI 프로젝트 루트의 개인 `.env`에 `GEMINI_API_KEY`를 설정합니다. 
 
 ## 검증
 
+일정 생성의 첫 두 단계인 확정 조건 캡처·읽기 전용 장소 매핑과 확정 취향 AI 구조화는 [내부 기반 안내](docs/generation-foundation.md)를 참고하세요. 새 HTTP API·후보 점수 계산·실제 일정 생성은 포함하지 않습니다.
+
 여행 준비·개인 조건의 신규 6개 API, 버전·개인정보·AI 제안 처리와 명시적 migration 002는 [구현·검증 안내](docs/preparation-implementation.md)를 확인하세요. AI 해석에는 별도 AI 패키지 0.2.0의 공개 함수를 사용하며, FE 화면의 신규 API 연결은 후속 작업입니다.
 
 검증된 의존성 버전은 `requirements.lock`에 기록했습니다. 같은 환경을 재현할 때는 먼저 `pip install -r requirements.lock`, 이후 `pip install -e . --no-deps`를 사용할 수 있습니다. 테스트는 HTTPX 기반 TestClient로 실행하며, 현재 라이브러리의 HTTPX2 전환 권고 경고는 동작 검증 결과와 별도로 기록합니다.
