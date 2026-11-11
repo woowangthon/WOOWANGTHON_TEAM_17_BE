@@ -47,7 +47,7 @@ def import_app(setup_app):
         conn.execute(text("CREATE TABLE plan_versions(id TEXT PRIMARY KEY,plan_id TEXT,trip_id TEXT,validation_result TEXT)"))
         conn.execute(text("INSERT INTO plan_versions VALUES(:v,:p,:t,:d)"),
                      {"v": VERSION, "p": PLAN, "t": TRIP, "d": json.dumps({"schema": "generation.v1", "document": generated_plan(), "sourceStamp": {"inputToken": "current"}})})
-        conn.execute(text("INSERT INTO places SELECT 102,'Second',contentTypeName,planningRole,adminCity,addr1,addr2,mapx,mapy,geoValidated,tel,homepageUrl,overviewText FROM places WHERE contentid=101"))
+        conn.execute(text("INSERT INTO places SELECT 102,'Second',contentTypeName,planningRole,adminCity,addr1,addr2,mapx,mapy,geoValidated,tel,homepageUrl,overviewText,firstimage FROM places WHERE contentid=101"))
     class FakeGenerationService:
         error = None
         def current_plan_for_canvas(self, conn, request, trip_id, plan_id, version_id):
@@ -81,6 +81,22 @@ def test_append_keeps_edits_and_uses_only_actual_same_day_place_edges():
     assert places[0]["schedule"] == {"startAt": None, "endAt": None, "locked": False}
     assert places[1]["source"] == {"planId": PLAN, "versionId": VERSION, "nodeId": P2}
     assert places[1]["position"]["y"] > 800
+
+
+def test_v4_import_preserves_day_positions_and_prunes_only_links_to_removed_dates():
+    old_day = str(uuid.uuid5(uuid.UUID(TRIP), "canvas-day:2026-11-10"))
+    linked = {"schemaVersion": 4,
+              "days": [{"id": DAY, "date": DATE, "position": {"x": 40, "y": 70}},
+                       {"id": old_day, "date": "2026-11-10", "position": {"x": 400, "y": 70}}],
+              "nodes": [], "edges": [],
+              "dayLinks": [{"id": "00000000-0000-4000-8000-000000000108", "source": DAY, "target": old_day}]}
+    result = append_generated_plan(linked, TRIP, PLAN, VERSION, generated_plan())
+    assert result["schemaVersion"] == 4
+    assert result["days"][0]["position"] == {"x": 40, "y": 70}
+    assert all(day["id"] != old_day for day in result["days"])
+    assert result["dayLinks"] == []
+    empty_links = {**linked, "dayLinks": []}
+    assert append_generated_plan(empty_links, TRIP, PLAN, VERSION, generated_plan())["dayLinks"] == []
 
 
 def test_import_cas_atomic_marker_and_repeat_after_deletion_preserve_latest(import_app):

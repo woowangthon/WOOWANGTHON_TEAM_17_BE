@@ -32,14 +32,14 @@ def setup_app():
         c.execute(text("CREATE TABLE trip_preparation_documents(trip_id TEXT,conditions_json TEXT,conditions_version INTEGER)"))
         c.execute(text("CREATE TABLE trip_members(id TEXT,trip_id TEXT,nickname TEXT,role TEXT,status TEXT)"))
         c.execute(text("CREATE TABLE device_session_memberships(session_id TEXT,trip_id TEXT,member_id TEXT)"))
-        c.execute(text("CREATE TABLE places(contentid INTEGER,title TEXT,contentTypeName TEXT,planningRole TEXT,adminCity TEXT,addr1 TEXT,addr2 TEXT,mapx REAL,mapy REAL,geoValidated TEXT,tel TEXT,homepageUrl TEXT,overviewText TEXT)"))
+        c.execute(text("CREATE TABLE places(contentid INTEGER,title TEXT,contentTypeName TEXT,planningRole TEXT,adminCity TEXT,addr1 TEXT,addr2 TEXT,mapx REAL,mapy REAL,geoValidated TEXT,tel TEXT,homepageUrl TEXT,overviewText TEXT,firstimage TEXT)"))
         c.execute(text("CREATE TABLE place_details(contentid INTEGER,openingHoursText TEXT,closedDaysText TEXT,feeText TEXT,bookingText TEXT,parkingText TEXT,menuText TEXT,estimatedStayMinutes INTEGER)"))
         c.execute(text("CREATE TABLE trip_canvas_documents(trip_id TEXT PRIMARY KEY,revision INTEGER,schema_version INTEGER,document_json TEXT,source_plan_id TEXT,source_version_id TEXT,created_at DATETIME,updated_at DATETIME)"))
         c.execute(text("CREATE TABLE trip_canvas_requests(session_id TEXT,trip_id TEXT,member_id TEXT,kind TEXT,method TEXT,path TEXT,idempotency_key TEXT,fingerprint TEXT,status TEXT,lease_token TEXT,lease_expires_at DATETIME,result_json TEXT,created_at DATETIME,updated_at DATETIME,expires_at DATETIME,PRIMARY KEY(session_id,method,path,idempotency_key))"))
         c.execute(text("INSERT INTO trips VALUES(:t,'OPEN','trip','code')"), {"t": TRIP})
         c.execute(text("INSERT INTO trip_members VALUES(:m,:t,'Member','MEMBER','ACTIVE')"), {"m": MEMBER, "t": TRIP})
         c.execute(text("INSERT INTO device_session_memberships VALUES(:s,:t,:m)"), {"s": SESSION, "t": TRIP, "m": MEMBER})
-        c.execute(text("INSERT INTO places VALUES(101,'Place','Museum','activity','City','Addr',NULL,127.5,36.6,'yes','010','javascript:alert(1)','overview')"))
+        c.execute(text("INSERT INTO places VALUES(101,'Place','Museum','activity','City','Addr',NULL,127.5,36.6,'yes','010','javascript:alert(1)','overview','https://example.test/place.jpg')"))
         c.execute(text("INSERT INTO place_details VALUES(101,'Hours','Closed','Fee','Booking','Parking','Menu',75)"))
 
     def find_session(conn, request):
@@ -95,9 +95,71 @@ def test_save_cas_and_same_key_replay(setup_app):
     assert replay.status_code == 200 and replay.json() == response.json()
     stale = client.put(f"/api/v1/trips/{TRIP}/canvas", json={**body, "expectedRevision": 0}, headers={**headers, "Idempotency-Key": str(uuid.uuid4())})
     assert stale.status_code == 409
-    detail = client.get(f"/api/v1/trips/{TRIP}/canvas/places/101").json()
+    detail = client.get(f"/api/v1/trips/{TRIP}/canvas/places/101", headers={"X-Canvas-Version": "4"}).json()
     assert detail["homepageUrl"] is None
+    assert detail["imageUrl"] == "https://example.test/place.jpg"
     assert detail["estimatedStayMinutes"] == 75
+    legacy_detail = client.get(f"/api/v1/trips/{TRIP}/canvas/places/101").json()
+    assert "imageUrl" not in legacy_detail
+
+
+def test_v4_place_metadata_is_gated_by_canvas_version_header(setup_app):
+    client, _ = setup_app
+    legacy = client.get(f"/api/v1/trips/{TRIP}/canvas/places/101")
+    modern = client.get(f"/api/v1/trips/{TRIP}/canvas/places/101", headers={"X-Canvas-Version": "4"})
+    assert "imageUrl" not in legacy.json()
+    assert modern.json()["imageUrl"] == "https://example.test/place.jpg"
+
+
+def test_v4_typed_price_labels_use_matching_role_and_keep_zero_explicit(setup_app):
+    client, engine = setup_app
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE restaurant_details(place_id INTEGER,avg_price_krw INTEGER)"))
+        conn.execute(text("CREATE TABLE tourism_details(place_id INTEGER,admission_fee_krw INTEGER)"))
+        conn.execute(text("CREATE TABLE lodging_details(place_id INTEGER,estimated_nightly_krw INTEGER,price_basis_people INTEGER)"))
+        conn.execute(text("INSERT INTO restaurant_details VALUES(101,0)"))
+        conn.execute(text("INSERT INTO tourism_details VALUES(101,2500)"))
+        conn.execute(text("INSERT INTO lodging_details VALUES(101,120000,2)"))
+        conn.execute(text("UPDATE place_details SET feeText=NULL WHERE contentid=101"))
+    url = f"/api/v1/trips/{TRIP}/canvas/places/101"
+    headers = {"X-Canvas-Version": "4"}
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE places SET planningRole='meal_stop' WHERE contentid=101"))
+    assert client.get(url, headers=headers).json()["priceLabel"] == "1인 약 0원"
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE places SET planningRole='sightseeing_stop' WHERE contentid=101"))
+    assert client.get(url, headers=headers).json()["priceLabel"] == "1인 입장료 2,500원"
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE places SET planningRole='overnight_lodging' WHERE contentid=101"))
+    assert client.get(url, headers=headers).json()["priceLabel"] == "1박 120,000원 (기준 2명)"
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE places SET planningRole='meal_stop' WHERE contentid=101"))
+        conn.execute(text("UPDATE place_details SET feeText='가격 문의' WHERE contentid=101"))
+    assert client.get(url, headers=headers).json()["priceLabel"] is None
+
+
+def test_v4_empty_day_links_persist_and_matching_revision_downgrade_is_rejected(setup_app):
+    client, engine = setup_app
+    day = "00000000-0000-4000-8000-000000000006"
+    document = {"schemaVersion": 4, "days": [{"id": day, "date": None, "position": {"x": -50, "y": 250}}],
+                "nodes": [], "edges": [], "dayLinks": []}
+    headers = {"Origin": "http://test", "Idempotency-Key": str(uuid.uuid4())}
+    saved = client.put(f"/api/v1/trips/{TRIP}/canvas", json={"expectedRevision": 0, "document": document}, headers=headers)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["document"] == document
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT schema_version,document_json FROM trip_canvas_documents WHERE trip_id=:t"), {"t": TRIP}).mappings().first()
+        assert row["schema_version"] == 4
+        assert json.loads(row["document_json"])["dayLinks"] == []
+    legacy = {"schemaVersion": 3, "days": [{"id": day, "date": None}], "nodes": [], "edges": []}
+    rejected = client.put(f"/api/v1/trips/{TRIP}/canvas", json={"expectedRevision": 1, "document": legacy},
+                          headers={"Origin": "http://test", "Idempotency-Key": str(uuid.uuid4())})
+    assert rejected.status_code == 409
+    assert rejected.json()["error"]["code"] == "SCHEMA_VERSION_CONFLICT"
+    stale = client.put(f"/api/v1/trips/{TRIP}/canvas", json={"expectedRevision": 0, "document": legacy},
+                       headers={"Origin": "http://test", "Idempotency-Key": str(uuid.uuid4())})
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "VERSION_CONFLICT"
 
 
 def test_recommendation_final_auth_blocks_replay_and_paid_duplicate(setup_app):

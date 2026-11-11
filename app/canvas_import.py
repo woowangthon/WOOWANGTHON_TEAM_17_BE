@@ -78,6 +78,10 @@ def append_generated_plan(document, trip_id, plan_id, version_id, plan):
     result["days"] = [d for d in result["days"]
                       if d["id"] in keep_days or d["date"] in new_dates
                       or d["id"] != str(uuid.uuid5(uuid.UUID(trip_id), "canvas-day:" + (d["date"] or "empty")))]
+    if result.get("schemaVersion") == 4:
+        retained_day_ids = {day["id"] for day in result["days"]}
+        result["dayLinks"] = [link for link in result.get("dayLinks", [])
+                              if link["source"] in retained_day_ids and link["target"] in retained_day_ids]
     days_by_date = {day["date"]: day["id"] for day in result["days"] if day["date"]}
     try:
         canonical_uuid(plan_id)

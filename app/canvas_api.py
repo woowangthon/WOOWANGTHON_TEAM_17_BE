@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import bindparam, text
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
 from . import canvas_import, canvas_models, canvas_recommendation, preparation
@@ -71,7 +72,8 @@ def _access(conn, request, trip_id, find_session, cookie_name):
 
 def _translate_store(exc: CanvasStoreError):
     table = {"VERSION_CONFLICT": ("VERSION_CONFLICT", 409), "IDEMPOTENCY_KEY_REUSED": ("IDEMPOTENCY_KEY_REUSED", 409),
-             "REQUEST_IN_PROGRESS": ("REQUEST_IN_PROGRESS", 409)}
+             "REQUEST_IN_PROGRESS": ("REQUEST_IN_PROGRESS", 409),
+             "SCHEMA_MIGRATION_REQUIRED": ("SCHEMA_MIGRATION_REQUIRED", 503)}
     code, status = table.get(exc.code, ("CANVAS_UNAVAILABLE", 503))
     return CanvasError(code, status, 1 if code == "REQUEST_IN_PROGRESS" else None)
 
@@ -133,10 +135,52 @@ def _place_details(conn, contentids: list[int]) -> list[dict[str, Any]]:
         return conn.execute(text(query).bindparams(bindparam("ids", expanding=True)), {"ids": ids}).mappings()
 
     places = {row["contentid"]: row for row in rows(
-        "SELECT contentid,title,contentTypeName,planningRole,adminCity,addr1,mapx,mapy,geoValidated,tel,homepageUrl,overviewText FROM places WHERE contentid IN :ids")}
+        "SELECT contentid,title,contentTypeName,planningRole,adminCity,addr1,mapx,mapy,geoValidated,tel,homepageUrl,overviewText,firstimage FROM places WHERE contentid IN :ids")}
     details = {}
     for row in rows("SELECT contentid,openingHoursText,closedDaysText,feeText,bookingText,parkingText,menuText,estimatedStayMinutes FROM place_details WHERE contentid IN :ids"):
         details.setdefault(row["contentid"], []).append(row)
+    roles = {contentid: place.get("planningRole") for contentid, place in places.items()}
+    typed_prices: dict[int, str] = {}
+
+    def optional_rows(query, selected_ids):
+        try:
+            return conn.execute(text(query).bindparams(bindparam("ids", expanding=True)),
+                                {"ids": selected_ids}).mappings().all()
+        except SQLAlchemyError as exc:
+            # Some installations and SQLite contract fixtures do not include
+            # these typed detail tables. Treat only missing-table/column errors
+            # as optional; surface connectivity and other query failures.
+            original = getattr(exc, "orig", None)
+            code = original.args[0] if getattr(original, "args", None) and isinstance(original.args[0], int) else None
+            message = str(original or exc).lower()
+            if code in {1054, 1146} or "no such table" in message or "no such column" in message:
+                return []
+            raise
+
+    meal_ids = [cid for cid in ids if roles.get(cid) == "meal_stop"]
+    if meal_ids:
+        result = optional_rows("SELECT place_id,avg_price_krw FROM restaurant_details WHERE place_id IN :ids", meal_ids)
+        for row in result:
+            value = row["avg_price_krw"]
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 4_294_967_295 and row["place_id"] not in typed_prices:
+                typed_prices[row["place_id"]] = f"1인 약 {value:,}원"
+    tourism_ids = [cid for cid in ids if roles.get(cid) in {"sightseeing_stop", "activity_stop", "culture_stop", "date_specific_event"}]
+    if tourism_ids:
+        result = optional_rows("SELECT place_id,admission_fee_krw FROM tourism_details WHERE place_id IN :ids", tourism_ids)
+        for row in result:
+            value = row["admission_fee_krw"]
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 4_294_967_295 and row["place_id"] not in typed_prices:
+                typed_prices[row["place_id"]] = f"1인 입장료 {value:,}원"
+    lodging_ids = [cid for cid in ids if roles.get(cid) in {"overnight_lodging", "overnight_camping"}]
+    if lodging_ids:
+        result = optional_rows("SELECT place_id,estimated_nightly_krw,price_basis_people FROM lodging_details WHERE place_id IN :ids", lodging_ids)
+        for row in result:
+            value, basis = row["estimated_nightly_krw"], row["price_basis_people"]
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 4_294_967_295 and row["place_id"] not in typed_prices:
+                label = f"1박 {value:,}원"
+                if isinstance(basis, int) and not isinstance(basis, bool) and 1 <= basis <= 65_535:
+                    label += f" (기준 {basis}명)"
+                typed_prices[row["place_id"]] = label
     output = []
     for contentid in ids:
         place = places.get(contentid)
@@ -161,7 +205,8 @@ def _place_details(conn, contentids: list[int]) -> list[dict[str, Any]]:
                        "openingHoursText": _clean(detail.get("openingHoursText")), "closedDaysText": _clean(detail.get("closedDaysText")),
                        "feeText": _clean(detail.get("feeText")), "bookingText": _clean(detail.get("bookingText")),
                        "parkingText": _clean(detail.get("parkingText")), "tel": _clean(place["tel"]),
-                       "homepageUrl": _safe_url(place["homepageUrl"])})
+                       "homepageUrl": _safe_url(place["homepageUrl"]), "imageUrl": _safe_url(place["firstimage"]),
+                       "priceLabel": typed_prices.get(contentid) if not _clean(detail.get("feeText")) else None})
     return output
 
 
@@ -224,6 +269,16 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
                           set_session_cookie=set_session_cookie, ApiError=ApiError)
 
     def success(payload, request):
+        # Older clients use exact place-field decoders. Keep the v3 response
+        # shape unless the caller explicitly opts into v4 metadata.
+        if request.headers.get("x-canvas-version") != "4":
+            def without_image_url(value):
+                if isinstance(value, dict):
+                    return {key: without_image_url(item) for key, item in value.items() if key not in {"imageUrl", "priceLabel"}}
+                if isinstance(value, list):
+                    return [without_image_url(item) for item in value]
+                return value
+            payload = without_image_url(payload)
         response = JSONResponse(payload, headers={"Cache-Control": "no-store"})
         raw = request.cookies.get(cookie_name())
         if raw:
@@ -304,6 +359,8 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
                         existing = store.load_document(conn, trip_id)
                         if (existing["revision"] if existing else 0) != body["expectedRevision"]:
                             raise CanvasError("VERSION_CONFLICT", 409)
+                        if existing and existing["document"].get("schemaVersion") == 4 and document["schemaVersion"] == 3:
+                            raise CanvasError("SCHEMA_VERSION_CONFLICT", 409)
                         source = existing["sourcePlan"] if existing else None
                         # A tab opened on a stacked legacy document may still submit
                         # that entire draft. Accept its current edits without restoring retired routes.

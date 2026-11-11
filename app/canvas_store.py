@@ -6,12 +6,35 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 
 class CanvasStoreError(Exception):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+def _integrity_code(exc):
+    original = getattr(exc, "orig", None)
+    sqlite_code = getattr(original, "sqlite_errorcode", None)
+    if isinstance(sqlite_code, int):
+        return sqlite_code
+    args = getattr(original, "args", ())
+    return args[0] if args and isinstance(args[0], int) else None
+
+
+def _raise_write_conflict(exc: IntegrityError):
+    """Translate only the expected unique insert race and known v4 migration gap."""
+    code = _integrity_code(exc)
+    message = str(getattr(exc, "orig", exc)).lower()
+    duplicate_trip = (code == 1062 or
+                      (code in {1555, 2067} and "trip_canvas_documents.trip_id" in message))
+    if duplicate_trip:
+        raise CanvasStoreError("VERSION_CONFLICT") from None
+    if "ck_trip_canvas_document_schema" in message or "check constraint failed: schema_version" in message:
+        raise CanvasStoreError("SCHEMA_MIGRATION_REQUIRED") from None
+    raise exc
 
 
 def _now() -> datetime:
@@ -53,16 +76,19 @@ class CanvasStore:
             if expected_revision != 0:
                 raise CanvasStoreError("VERSION_CONFLICT")
             try:
-                conn.execute(text("INSERT INTO trip_canvas_documents(trip_id,revision,schema_version,document_json,source_plan_id,source_version_id,created_at,updated_at) VALUES(:t,1,3,:d,:p,:v,:n,:n)"),
-                             {"t": trip_id, "d": encoded, "p": source_plan["planId"] if source_plan else None,
+                conn.execute(text("INSERT INTO trip_canvas_documents(trip_id,revision,schema_version,document_json,source_plan_id,source_version_id,created_at,updated_at) VALUES(:t,1,:schema,:d,:p,:v,:n,:n)"),
+                             {"t": trip_id, "schema": document["schemaVersion"], "d": encoded, "p": source_plan["planId"] if source_plan else None,
                               "v": source_plan["versionId"] if source_plan else None, "n": now})
-            except Exception:
-                raise CanvasStoreError("VERSION_CONFLICT") from None
+            except IntegrityError as exc:
+                _raise_write_conflict(exc)
             revision = 1
         else:
-            updated = conn.execute(text("UPDATE trip_canvas_documents SET revision=revision+1,schema_version=3,document_json=:d,source_plan_id=:p,source_version_id=:v,updated_at=:n WHERE trip_id=:t AND revision=:r"),
-                                   {"d": encoded, "p": source_plan["planId"] if source_plan else None,
-                                    "v": source_plan["versionId"] if source_plan else None, "n": now, "t": trip_id, "r": expected_revision})
+            try:
+                updated = conn.execute(text("UPDATE trip_canvas_documents SET revision=revision+1,schema_version=:schema,document_json=:d,source_plan_id=:p,source_version_id=:v,updated_at=:n WHERE trip_id=:t AND revision=:r"),
+                                       {"schema": document["schemaVersion"], "d": encoded, "p": source_plan["planId"] if source_plan else None,
+                                        "v": source_plan["versionId"] if source_plan else None, "n": now, "t": trip_id, "r": expected_revision})
+            except IntegrityError as exc:
+                _raise_write_conflict(exc)
             if updated.rowcount != 1:
                 raise CanvasStoreError("VERSION_CONFLICT")
             revision = expected_revision + 1

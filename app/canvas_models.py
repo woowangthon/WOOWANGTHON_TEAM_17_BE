@@ -1,4 +1,4 @@
-"""Strict validation for the shared canvas v3 wire document."""
+"""Strict validation for the shared canvas v3/v4 wire documents."""
 from __future__ import annotations
 
 import json
@@ -16,7 +16,9 @@ class CanvasValidationError(ValueError):
 COLORS = {"default", "lime", "sky", "rose", "amber"}
 INTENTS = {"route", "candidate"}
 DAY_KEYS = {"id", "date"}
+DAY_POSITION_KEYS = DAY_KEYS | {"position"}
 EDGE_KEYS = {"id", "source", "target"}
+DAY_LINK_KEYS = EDGE_KEYS
 COMMON_NODE_KEYS = {"id", "kind", "dayId", "position", "color"}
 MAX_NODES = 500
 MAX_EDGES = 500
@@ -65,8 +67,11 @@ def validate_document(document: Any) -> dict[str, Any]:
         raise CanvasValidationError("invalid JSON") from None
     if len(encoded) > MAX_DOCUMENT_BYTES:
         raise CanvasValidationError("document too large")
-    if (not isinstance(document, dict) or set(document) != {"schemaVersion", "days", "nodes", "edges"}
-            or type(document["schemaVersion"]) is not int or document["schemaVersion"] != 3):
+    if not isinstance(document, dict) or type(document.get("schemaVersion")) is not int or document["schemaVersion"] not in {3, 4}:
+        raise CanvasValidationError("invalid document shape")
+    version = document["schemaVersion"]
+    expected_keys = {"schemaVersion", "days", "nodes", "edges"} | ({"dayLinks"} if version == 4 else set())
+    if set(document) != expected_keys:
         raise CanvasValidationError("invalid document shape")
     days, nodes, edges = document["days"], document["nodes"], document["edges"]
     if not isinstance(days, list) or not 1 <= len(days) <= 31 or not isinstance(nodes, list) or len(nodes) > MAX_NODES or not isinstance(edges, list) or len(edges) > MAX_EDGES:
@@ -75,7 +80,8 @@ def validate_document(document: Any) -> dict[str, Any]:
     dates: set[str] = set()
     clean_days = []
     for day in days:
-        if not isinstance(day, dict) or set(day) != DAY_KEYS:
+        allowed_day_keys = DAY_POSITION_KEYS if version == 4 else DAY_KEYS
+        if not isinstance(day, dict) or not DAY_KEYS <= set(day) or set(day) - allowed_day_keys:
             raise CanvasValidationError("invalid day")
         day_id = canonical_uuid(day["id"])
         if day_id in day_ids:
@@ -92,7 +98,19 @@ def validate_document(document: Any) -> dict[str, Any]:
             if day_date in dates:
                 raise CanvasValidationError("duplicate date")
             dates.add(day_date)
-        clean_days.append({"id": day_id, "date": day_date})
+        clean_day = {"id": day_id, "date": day_date}
+        if "position" in day:
+            position = day["position"]
+            if not isinstance(position, dict) or set(position) != {"x", "y"}:
+                raise CanvasValidationError("invalid day position")
+            coords = {}
+            for axis in ("x", "y"):
+                value = position[axis]
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or abs(value) > 100000:
+                    raise CanvasValidationError("invalid day position")
+                coords[axis] = value
+            clean_day["position"] = coords
+        clean_days.append(clean_day)
     ids: set[str] = set()
     clean_nodes = []
     nodes_by_id: dict[str, dict[str, Any]] = {}
@@ -168,4 +186,23 @@ def validate_document(document: Any) -> dict[str, Any]:
                 raise CanvasValidationError("edge cycle")
             seen.add(current)
             current = outgoing[current]
-    return {"schemaVersion": 3, "days": clean_days, "nodes": clean_nodes, "edges": clean_edges}
+    clean = {"schemaVersion": version, "days": clean_days, "nodes": clean_nodes, "edges": clean_edges}
+    if version == 4:
+        day_links = document["dayLinks"]
+        if not isinstance(day_links, list) or len(day_links) > MAX_EDGES:
+            raise CanvasValidationError("day link limits exceeded")
+        link_ids: set[str] = set()
+        pairs: set[tuple[str, str]] = set()
+        clean_links = []
+        for link in day_links:
+            if not isinstance(link, dict) or set(link) != DAY_LINK_KEYS:
+                raise CanvasValidationError("invalid day link")
+            link_id, source, target = (canonical_uuid(link[k]) for k in ("id", "source", "target"))
+            pair = (source, target)
+            if link_id in link_ids or source == target or source not in day_ids or target not in day_ids or pair in pairs:
+                raise CanvasValidationError("invalid day link reference")
+            link_ids.add(link_id)
+            pairs.add(pair)
+            clean_links.append({"id": link_id, "source": source, "target": target})
+        clean["dayLinks"] = clean_links
+    return clean

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import uuid
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
 from app.canvas_models import CanvasValidationError, validate_document
 from app.canvas_store import CanvasStore, CanvasStoreError
@@ -68,6 +70,25 @@ def test_canvas_validation_graph_rules_and_exact_fields():
         validate_document(bad)
 
 
+def test_v4_days_and_day_links_are_strict_and_empty_links_are_valid():
+    value = {"schemaVersion": 4, "days": [{"id": DAY, "date": "2026-11-11", "position": {"x": -100000, "y": 8}},
+                                         {"id": "00000000-0000-4000-8000-000000000099", "date": None}],
+             "nodes": [], "edges": [], "dayLinks": []}
+    clean = validate_document(value)
+    assert clean == value
+    linked = {**value, "dayLinks": [{"id": "00000000-0000-4000-8000-000000000098", "source": DAY,
+                                      "target": "00000000-0000-4000-8000-000000000099"}]}
+    assert validate_document(linked)["dayLinks"] == linked["dayLinks"]
+    for invalid in (
+        {**value, "dayLinks": [{"id": "00000000-0000-4000-8000-000000000098", "source": DAY, "target": DAY}]},
+        {**value, "dayLinks": [{"id": "00000000-0000-4000-8000-000000000098", "source": DAY, "target": "00000000-0000-4000-8000-000000000099"},
+                               {"id": "00000000-0000-4000-8000-000000000097", "source": DAY, "target": "00000000-0000-4000-8000-000000000099"}]},
+        {**value, "days": [{"id": DAY, "date": None, "position": {"x": 100001, "y": 0}}, value["days"][1]]},
+    ):
+        with pytest.raises(CanvasValidationError):
+            validate_document(invalid)
+
+
 def test_canvas_cas_idempotency_and_atomic_rollback(engine):
     store = CanvasStore(engine)
     document = validate_document(doc())
@@ -95,6 +116,35 @@ def test_canvas_cas_idempotency_and_atomic_rollback(engine):
     with pytest.raises(CanvasStoreError, match="IDEMPOTENCY_KEY_REUSED"):
         with engine.begin() as c:
             store.reserve_request(c, session_id="s", trip_id=TRIP, member_id="m", kind="SAVE", method="PUT", path="/canvas", key="k", fingerprint="changed", lease_token="new")
+
+
+def test_v4_write_on_unmigrated_schema_is_not_reported_as_revision_conflict():
+    old_engine = create_engine("sqlite+pysqlite:///:memory:")
+    with old_engine.begin() as conn:
+        conn.execute(text("CREATE TABLE trip_canvas_documents(trip_id TEXT PRIMARY KEY,revision INTEGER,schema_version INTEGER CHECK(schema_version=3),document_json TEXT,source_plan_id TEXT,source_version_id TEXT,created_at DATETIME,updated_at DATETIME)"))
+    v4 = validate_document({"schemaVersion": 4, "days": [{"id": DAY, "date": None}], "nodes": [], "edges": [], "dayLinks": []})
+    with pytest.raises(CanvasStoreError, match="SCHEMA_MIGRATION_REQUIRED"):
+        with old_engine.begin() as conn:
+            CanvasStore(old_engine).save_document(conn, TRIP, 0, v4)
+    old_engine.dispose()
+
+
+def test_canvas_insert_conflict_translates_only_unique_trip_id_error():
+    from app.canvas_store import _raise_write_conflict
+    dup_engine = create_engine("sqlite+pysqlite:///:memory:")
+    with dup_engine.begin() as conn:
+        conn.execute(text("CREATE TABLE trip_canvas_documents(trip_id TEXT PRIMARY KEY)"))
+        conn.execute(text("INSERT INTO trip_canvas_documents VALUES('trip')"))
+    with pytest.raises(IntegrityError) as caught:
+        with dup_engine.begin() as conn:
+            conn.execute(text("INSERT INTO trip_canvas_documents VALUES('trip')"))
+    duplicate = caught.value
+    with pytest.raises(CanvasStoreError, match="VERSION_CONFLICT"):
+        _raise_write_conflict(duplicate)
+    other = IntegrityError("insert", {}, sqlite3.IntegrityError(1, "CHECK constraint failed: unrelated"))
+    with pytest.raises(IntegrityError):
+        _raise_write_conflict(other)
+    dup_engine.dispose()
 
 
 @pytest.mark.parametrize("field,value", [("kind", []), ("kind", {}), ("color", []), ("color", {}), ("intent", []), ("intent", {})])
