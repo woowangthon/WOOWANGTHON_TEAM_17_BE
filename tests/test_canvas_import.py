@@ -191,7 +191,9 @@ def test_new_version_replaces_generated_route_but_keeps_personal_placements():
 def test_reading_an_old_stacked_canvas_exposes_only_its_current_generated_route(import_app):
     client, engine, _ = import_app
     current = import_request(client).json()
-    obsolete = append_generated_plan(empty_document(), TRIP, PLAN, str(uuid.uuid4()), generated_plan())
+    day_id = current["document"]["days"][0]["id"]
+    empty = {**empty_document(), "days": current["document"]["days"]}
+    obsolete = append_generated_plan(empty, TRIP, PLAN, str(uuid.uuid4()), generated_plan())
     stacked = copy.deepcopy(current["document"])
     stacked["nodes"] += obsolete["nodes"]
     stacked["edges"] += obsolete["edges"]
@@ -201,3 +203,26 @@ def test_reading_an_old_stacked_canvas_exposes_only_its_current_generated_route(
     visible = client.get(f"/api/v1/trips/{TRIP}/canvas").json()
     assert visible["document"] == current["document"]
     assert visible["revision"] == current["revision"]
+
+    # Opening the existing itinerary compacts the stored stack exactly once.
+    assert import_request(client, revision=current["revision"] - 1).status_code == 409
+    cleaned = import_request(client, revision=current["revision"]).json()
+    assert cleaned["revision"] == current["revision"] + 1
+    assert import_request(client, revision=cleaned["revision"]).json()["revision"] == cleaned["revision"]
+    with engine.connect() as conn:
+        stored = json.loads(conn.execute(text("SELECT document_json FROM trip_canvas_documents")).scalar_one())
+    assert stored == visible["document"]
+
+    # A second tab submits its old full document with a new comment: its stale
+    # revision conflicts, and even a rebased write cannot resurrect the obsolete route.
+    note = {"id": PLACE, "kind": "comment", "dayId": day_id, "position": {"x": 0, "y": 0},
+            "color": "rose", "text": "shared comment"}
+    stacked["nodes"].append(note)
+    url = f"/api/v1/trips/{TRIP}/canvas"
+    assert client.put(url, headers=headers(), json={"document": stacked, "expectedRevision": current["revision"]}).status_code == 409
+    edited = client.put(url, headers=headers(), json={"document": stacked, "expectedRevision": cleaned["revision"]})
+    assert edited.status_code == 200, edited.text
+    with engine.connect() as conn:
+        stored = json.loads(conn.execute(text("SELECT document_json FROM trip_canvas_documents")).scalar_one())
+    assert stored["nodes"] == [*visible["document"]["nodes"], note]
+    assert stored["edges"] == visible["document"]["edges"]

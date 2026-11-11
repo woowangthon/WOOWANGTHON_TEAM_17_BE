@@ -392,6 +392,12 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
             current, version = _conditions(conn, trip_id)
             if expected != version:
                 _fail(409, "VERSION_CONFLICT", conditions=version)
+            try:
+                current_normalized = validate_conditions(current)
+            except PrepFailure:
+                current_normalized = None
+            if current_normalized == conditions:
+                return {"conditionsVersion": version, "conditions": conditions, "requiresReconfirmation": False}
             next_version = version + 1
             encoded = json.dumps(conditions, ensure_ascii=False, separators=(",", ":"))
             if version == 0:
@@ -443,6 +449,15 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
             pv = int(row["preference_version"]) if row else 0
             if ec != cv or ep != pv:
                 _fail(409, "VERSION_CONFLICT", conditions=cv, preference=pv)
+            current_draft = _initial_draft()
+            if row:
+                try:
+                    raw_current = _json(row["draft_json"])
+                    current_draft = validate_draft({**raw_current, "scheduleItems": raw_current.get("scheduleItems", [])})
+                except Exception:
+                    current_draft = None
+            if current_draft == draft:
+                return _response(row, cv)
             new_pv = pv + 1
             encoded = json.dumps(draft, ensure_ascii=False, separators=(",", ":"))
             if row:

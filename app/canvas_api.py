@@ -302,14 +302,20 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
                         result = reservation["replay"]
                     else:
                         existing = store.load_document(conn, trip_id)
+                        if (existing["revision"] if existing else 0) != body["expectedRevision"]:
+                            raise CanvasError("VERSION_CONFLICT", 409)
+                        source = existing["sourcePlan"] if existing else None
+                        # A tab opened on a stacked legacy document may still submit
+                        # that entire draft. Accept its current edits without restoring retired routes.
+                        current_doc = canvas_import.current_route_document(document, source["versionId"]) if source else document
                         try:
-                            canvas_import.validate_managed_nodes(conn, trip_id, document, existing["document"] if existing else None)
+                            canvas_import.validate_managed_nodes(conn, trip_id, current_doc, existing["document"] if existing else None)
                         except canvas_import.CanvasImportError as exc:
                             raise CanvasError(exc.code, exc.status) from None
                         try:
-                            ids = [n["contentid"] for n in document["nodes"] if n["kind"] == "place"]
+                            ids = [n["contentid"] for n in current_doc["nodes"] if n["kind"] == "place"]
                             _place_details(conn, ids)
-                            saved = store.save_document(conn, trip_id, body["expectedRevision"], document)
+                            saved = store.save_document(conn, trip_id, body["expectedRevision"], current_doc)
                             result = public_state(conn, trip_id, saved)
                             store.complete_request(conn, session_id=session["id"], method="PUT", path=f"/api/v1/trips/{trip_id}/canvas",
                                                    key=key, lease_token=lease, result=result)
@@ -379,8 +385,14 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
                         current = store.load_document(conn, trip_id)
                         marker = payload.get("_canvasImport") or {}
                         if marker.get("tripId") == trip_id:
-                            # Reopening a version never restores nodes deleted by a
-                            # collaborator. Return the latest shared document.
+                            # Compact the saved legacy stack once, using the room's
+                            # current source even when an older import is revisited.
+                            if current and current["sourcePlan"]:
+                                visible = canvas_import.current_route_document(current["document"], current["sourcePlan"]["versionId"])
+                                if visible != current["document"]:
+                                    if current["revision"] != revision:
+                                        raise CanvasError("VERSION_CONFLICT", 409)
+                                    current = store.save_document(conn, trip_id, revision, visible, source_plan=current["sourcePlan"])
                             result = public_state(conn, trip_id, current)
                         else:
                             actual_revision = current["revision"] if current else 0

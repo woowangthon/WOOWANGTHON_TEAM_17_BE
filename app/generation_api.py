@@ -120,15 +120,15 @@ def register_generation_routes(app: FastAPI, engine, settings, *, find_session: 
         body = await body_json(request, {"expectedInputToken", "expectedSettingsVersion"})
         idem = key(request)
         try:
-            job = await run_in_threadpool(service.create_job, request, parse_trip(trip_id), body, idem)
+            job, status = await run_in_threadpool(service.create_job, request, parse_trip(trip_id), body, idem)
         except ServiceError as exc:
             translate(exc)
-        if app.state.generation_run_inline:
+        if status == 202 and app.state.generation_run_inline:
             await service.run_job(job["id"], request)
             job = await run_in_threadpool(service.get_job, request, trip_id, job["id"])
-        else:
+        elif status == 202:
             background.add_task(service.run_job, job["id"], request)
-        return success(job, request, 202)
+        return success(job, request, status)
 
     @app.get("/api/v1/trips/{trip_id}/generation/jobs/{job_id}")
     def get_generation_job(trip_id: str, job_id: str, request: Request):

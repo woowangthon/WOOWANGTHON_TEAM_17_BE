@@ -203,6 +203,23 @@ def test_new_participant_does_not_block_owner_preparation_readiness(client, app)
         assert prep["readiness"]["reasons"] == []
 
 
+def test_normalized_condition_and_preference_noops_preserve_versions_and_confirmation(client):
+    room = create_room(client)
+    assert save_conditions(client, room).status_code == 200
+    assert save_personal(client, room, cv=1).status_code == 200
+    assert confirm(client, room, cv=1).status_code == 200
+
+    same_conditions = save_conditions(client, room, version=1)
+    assert same_conditions.status_code == 200, same_conditions.text
+    assert same_conditions.json()["conditionsVersion"] == 1
+    assert same_conditions.json()["requiresReconfirmation"] is False
+
+    same_draft = save_personal(client, room, cv=1, pv=1)
+    assert same_draft.status_code == 200, same_draft.text
+    assert same_draft.json()["preferenceVersion"] == 1
+    assert same_draft.json()["confirmation"]["status"] == "confirmed"
+
+
 @pytest.mark.parametrize("method,suffix,payload", [
     ("GET", "/preparation", None), ("GET", "/preferences/me", None),
     ("PUT", "/conditions", {"expectedConditionsVersion": 0, "conditions": CONDITIONS}),

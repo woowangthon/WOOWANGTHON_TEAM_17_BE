@@ -4,6 +4,8 @@
 
 [기능 계약](https://app.notion.com/p/413e977e4908817a9af9ca9c7fa0ddee)과 [공통 규칙](https://app.notion.com/p/40ee977e49088189b512e6e817984d48)을 구현합니다. 후보 선별·AI 날짜별 방문 초안은 기존 AI 패키지 0.4.0을 사용합니다. 이번 작업은 실제 일정 생성, 검증, 초안 조회·저장과 인접 FE 연결입니다. 변경 이력·복원·자동 재생성은 포함하지 않습니다.
 
+현재 입력으로 완료된 일정은 GET /generation의 latestPlan.current로 확인한다. POST /generation/jobs는 방 잠금 안에서 입력과 유효한 계획 버전을 확인한다. 동일 입력을 다른 키로 요청하면 기존 작업을 200으로 반환하고, 새 작업을 접수하면 202로 반환한다.
+
 ## API
 
 아래 경로의 공통 접두사는 `/api/v1/trips/{tripId}`입니다. 기존 기기 쿠키로 인증하며 ACTIVE 참여자와 OPEN 여행방을 확인합니다. 쓰기 요청에는 허용된 Origin과 JSON이 필요하고, 모든 POST에는 UUID `Idempotency-Key`가 필요합니다.

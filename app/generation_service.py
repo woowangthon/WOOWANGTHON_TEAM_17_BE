@@ -200,8 +200,15 @@ class GenerationService:
             latest = conn.execute(text("SELECT id,status,phase,plan_id,version_id,error_code,created_at,updated_at FROM generation_jobs WHERE trip_id=:t AND kind='GENERATE' ORDER BY created_at DESC LIMIT 1"), {"t": trip_id}).mappings().first()
             plan = None
             if latest and latest["plan_id"]:
-                rec = conn.execute(text("SELECT p.id,v.id AS version_id,v.status FROM plans p JOIN plan_versions v ON v.id=:v AND v.plan_id=p.id WHERE p.id=:p AND p.trip_id=:t"), {"p": latest["plan_id"], "v": latest["version_id"], "t": trip_id}).mappings().first()
-                if rec: plan = {"planId": rec["id"], "versionId": rec["version_id"], "status": rec["status"]}
+                from . import plan_store
+                rec = plan_store.get_plan_record(conn, trip_id, latest["plan_id"])
+                if rec:
+                    current = bool(rec["public"]["status"] in {"DRAFT", "SAVED"}
+                                   and rec["public"]["versionId"] == latest["version_id"]
+                                   and rec["sourceStamp"].get("inputToken") == token
+                                   and rec["sourceStamp"].get("catalogDigest") == catalog.digest)
+                    plan = {"planId": latest["plan_id"], "versionId": latest["version_id"],
+                            "status": rec["public"]["status"], "current": current}
             conn.commit()
             return {"conditionsVersion": cv, "inputToken": token, "settingsVersion": sv, "settings": settings,
                     "preparationMembers": statuses,
@@ -222,6 +229,29 @@ class GenerationService:
         return {"id": row["id"], "kind": "GENERATE", "status": row["status"], "phase": row["phase"],
                 "planId": row["plan_id"], "versionId": row["version_id"], "errorCode": row["error_code"],
                 "createdAt": iso(row["created_at"]), "updatedAt": iso(row["updated_at"])}
+
+    def _reusable_generation_job(self, conn, trip_id, row, input_token, catalog_digest, now):
+        stamp = _json(row["input_stamp_json"])
+        if stamp.get("inputToken") != input_token or stamp.get("catalogDigest") != catalog_digest:
+            return False
+        if row["status"] in {"QUEUED", "RUNNING"}:
+            return row["expires_at"] > now and row["lease_expires_at"] > now
+        if row["status"] != "SUCCEEDED" or not row["plan_id"] or not row["version_id"]:
+            return False
+        from . import plan_store
+        record = plan_store.get_plan_record(conn, trip_id, row["plan_id"])
+        return bool(record and record["public"]["status"] in {"DRAFT", "SAVED"}
+                    and record["public"]["versionId"] == row["version_id"]
+                    and record["sourceStamp"].get("inputToken") == input_token
+                    and record["sourceStamp"].get("catalogDigest") == catalog_digest)
+
+    @staticmethod
+    def _store_coalesced_key(conn, candidate, trip_id, member, session, path, key, fingerprint, now):
+        """Bind a different key to the canonical job without creating another job row."""
+        conn.execute(text("INSERT INTO api_idempotency(session_id,method,path,idempotency_key,fingerprint,state,trip_id,member_id,http_status,response_json,created_at,expires_at) VALUES(:s,'POST',:p,:k,:f,'COMPLETE',:t,:m,200,:response,:n,:e)"), {
+            "s": session["id"], "p": path, "k": key, "f": fingerprint, "t": trip_id,
+            "m": member["id"], "response": _canonical({"coalescedJobId": candidate["id"]}),
+            "n": now, "e": now + timedelta(hours=24)})
 
     def _self_capture(self, conn, request, trip_id):
         session, trip, member = self._auth(conn, request, trip_id)
@@ -525,11 +555,27 @@ class GenerationService:
         trip_id = str(uuid.UUID(trip_id)); catalog = self._catalog(); conn = self._conn()
         try:
             session, _, member = self._auth(conn, request, trip_id, owner=True); conditions, cv = preparation._conditions(conn, trip_id)
-            self._rate(session["id"], member["id"])
             if not isinstance(body, dict): raise ServiceError("VALIDATION_ERROR", 400)
             conn.execute(text("UPDATE generation_jobs SET status='FAILED',phase='failed',error_code='PROCESS_INTERRUPTED' WHERE trip_id=:t AND status IN ('QUEUED','RUNNING') AND lease_expires_at<=:n"), {"t": trip_id, "n": _now()})
             sv, _ = self._settings(conn, trip_id, cv); token, statuses, personal = self._source_token(conn, trip_id, cv, catalog.digest, sv)
-            if set(body) != {"expectedInputToken", "expectedSettingsVersion"} or body["expectedInputToken"] != token: raise ServiceError("STALE_GENERATION_INPUT")
+            if set(body) != {"expectedInputToken", "expectedSettingsVersion"}:
+                raise ServiceError("VALIDATION_ERROR", 400)
+            path = f"/api/v1/trips/{trip_id}/generation/jobs"
+            fp = hashlib.sha256(_canonical(body).encode()).hexdigest()
+            now = _now()
+            old = conn.execute(text("SELECT * FROM generation_jobs WHERE session_id=:s AND method='POST' AND path=:p AND idempotency_key=:k FOR UPDATE"),
+                               {"s": session["id"], "p": path, "k": key}).mappings().first()
+            receipt = conn.execute(text("SELECT * FROM api_idempotency WHERE session_id=:s AND method='POST' AND path=:p AND idempotency_key=:k FOR UPDATE"),
+                                   {"s": session["id"], "p": path, "k": key}).mappings().first()
+            if old and (old["trip_id"] != trip_id or old["member_id"] != member["id"]):
+                raise ServiceError("NOT_AUTHORIZED", 403)
+            if receipt and (receipt["trip_id"] != trip_id or receipt["member_id"] != member["id"]):
+                raise ServiceError("NOT_AUTHORIZED", 403)
+            if old and old["expires_at"] > now and old["fingerprint"] != fp:
+                raise ServiceError("IDEMPOTENCY_CONFLICT")
+            if receipt and receipt["expires_at"] > now and receipt["fingerprint"] != fp:
+                raise ServiceError("IDEMPOTENCY_CONFLICT")
+            if body["expectedInputToken"] != token: raise ServiceError("STALE_GENERATION_INPUT")
             if body["expectedSettingsVersion"] != sv: raise ServiceError("VERSION_CONFLICT")
             current_settings = self._settings(conn, trip_id, cv)[1]
             if any(conditions.get(k) is None for k in ("region", "startDate", "endDate", "expectedPeople", "budget", "transport")):
@@ -540,18 +586,45 @@ class GenerationService:
             if issues: raise ServiceError(issues[0])
             if not self._common_ready(conditions, current_settings):
                 raise ServiceError("LODGING_ANCHOR_REQUIRED" if conditions.get("lodging") else "FIXED_SCHEDULE_ANCHOR_REQUIRED")
-            path = f"/api/v1/trips/{trip_id}/generation/jobs"; fp = hashlib.sha256(_canonical(body).encode()).hexdigest()
-            old = conn.execute(text("SELECT * FROM generation_jobs WHERE session_id=:s AND method='POST' AND path=:p AND idempotency_key=:k AND expires_at>:n FOR UPDATE"), {"s": session["id"], "p": path, "k": key, "n": _now()}).mappings().first()
             if old:
-                if old["fingerprint"] != fp: raise ServiceError("IDEMPOTENCY_CONFLICT")
-                if _json(old["input_stamp_json"]).get("inputToken") != token: raise ServiceError("STALE_GENERATION_INPUT")
-                job = self._job_public(old); conn.commit(); return job
-            conn.execute(text("DELETE FROM generation_jobs WHERE session_id=:s AND method='POST' AND path=:p AND idempotency_key=:k AND expires_at<=:n"), {"s": session["id"], "p": path, "k": key, "n": _now()})
-            active = conn.execute(text("SELECT id FROM generation_jobs WHERE trip_id=:t AND kind='GENERATE' AND status IN ('QUEUED','RUNNING') AND lease_expires_at>:n LIMIT 1 FOR UPDATE"), {"t": trip_id, "n": _now()}).first()
+                if old["expires_at"] > now:
+                    if old["fingerprint"] != fp: raise ServiceError("IDEMPOTENCY_CONFLICT")
+                    if _json(old["input_stamp_json"]).get("inputToken") != token: raise ServiceError("STALE_GENERATION_INPUT")
+                    job = self._job_public(old); conn.commit(); return job, 202
+                if (old["fingerprint"] == fp and _json(old["input_stamp_json"]).get("inputToken") == token
+                        and self._reusable_generation_job(conn, trip_id, old, token, catalog.digest, now)):
+                    conn.execute(text("UPDATE generation_jobs SET expires_at=:e WHERE id=:id"),
+                                 {"e": now + timedelta(hours=24), "id": old["id"]})
+                    job = self._job_public(old); conn.commit(); return job, 202
+                conn.execute(text("DELETE FROM generation_jobs WHERE id=:id"), {"id": old["id"]})
+            if receipt and receipt["expires_at"] > now:
+                if receipt["fingerprint"] != fp: raise ServiceError("IDEMPOTENCY_CONFLICT")
+                pointer = _json(receipt["response_json"])
+                canonical = conn.execute(text("SELECT * FROM generation_jobs WHERE id=:id AND trip_id=:t AND kind='GENERATE'"),
+                                         {"id": pointer.get("coalescedJobId"), "t": trip_id}).mappings().first()
+                if not canonical: raise ServiceError("STALE_GENERATION_INPUT")
+                if _json(canonical["input_stamp_json"]).get("inputToken") != token:
+                    raise ServiceError("STALE_GENERATION_INPUT")
+                job = self._job_public(canonical); conn.commit(); return job, 200
+            conn.execute(text("DELETE FROM api_idempotency WHERE session_id=:s AND method='POST' AND path=:p AND idempotency_key=:k AND expires_at<=:n"),
+                         {"s": session["id"], "p": path, "k": key, "n": _now()})
+            now = _now()
+            candidates = conn.execute(text("SELECT * FROM generation_jobs WHERE trip_id=:t AND kind='GENERATE' AND method='POST' AND path=:p AND ((status IN ('QUEUED','RUNNING') AND expires_at>:n AND lease_expires_at>:n) OR (status='SUCCEEDED' AND JSON_UNQUOTE(JSON_EXTRACT(input_stamp_json,'$.inputToken'))=:token)) ORDER BY created_at DESC FOR UPDATE"),
+                                      {"t": trip_id, "p": path, "n": now, "token": token}).mappings().all()
+            candidate = next((row for row in candidates if self._reusable_generation_job(
+                conn, trip_id, row, token, catalog.digest, now)), None)
+            if candidate:
+                self._store_coalesced_key(conn, candidate, trip_id, member, session, path, key, fp, now)
+                result = self._job_public(candidate)
+                conn.commit()
+                return result, 200
+            active = conn.execute(text("SELECT id FROM generation_jobs WHERE trip_id=:t AND kind='GENERATE' AND status IN ('QUEUED','RUNNING') AND expires_at>:n AND lease_expires_at>:n LIMIT 1 FOR UPDATE"),
+                                  {"t": trip_id, "n": now}).first()
             if active: raise ServiceError("GENERATION_IN_PROGRESS", retry=2)
+            self._rate(session["id"], member["id"])
             job_id, lease_token = str(uuid.uuid4()), str(uuid.uuid4()); now = _now()
             conn.execute(text("INSERT INTO generation_jobs(id,trip_id,member_id,session_id,kind,method,path,idempotency_key,fingerprint,lease_token,lease_expires_at,status,phase,input_stamp_json,created_at,updated_at,expires_at) VALUES(:id,:t,:m,:s,'GENERATE','POST',:p,:k,:f,:token,:lease,'QUEUED','queued',:stamp,:n,:n,:exp)"), {"id": job_id, "t": trip_id, "m": member["id"], "s": session["id"], "p": path, "k": key, "f": fp, "token": lease_token, "lease": now+timedelta(seconds=240), "stamp": _canonical({"inputToken": token,"conditionsVersion":cv,"settingsVersion":sv,"catalogDigest":catalog.digest,"members":personal}), "n": now,"exp":now+timedelta(hours=24)})
-            row = conn.execute(text("SELECT * FROM generation_jobs WHERE id=:id"), {"id": job_id}).mappings().first(); conn.commit(); return self._job_public(row)
+            row = conn.execute(text("SELECT * FROM generation_jobs WHERE id=:id"), {"id": job_id}).mappings().first(); conn.commit(); return self._job_public(row), 202
         except ServiceError: conn.rollback(); raise
         except Exception: conn.rollback(); raise ServiceError("GENERATION_UNAVAILABLE", 503) from None
         finally: conn.close()

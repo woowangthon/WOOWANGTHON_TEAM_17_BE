@@ -33,7 +33,7 @@ def normalize(preferences, tags):
             "conflictCandidates": [], "needsReview": bool(terms or unmapped)}
 
 
-def draft(dates, candidates, fixed_visits, max_visits):
+def draft(dates, candidates, fixed_visits, max_visits, schedule_context=None):
     return {"days": [{"date": day, "contentids": [11]} for day in dates]}
 
 
@@ -123,15 +123,31 @@ def test_unconfirmed_member_draft_does_not_change_generation_input_token(app, cl
 
 def test_complete_generation_save_refresh_and_idempotency(app, client, ready):
     calls = []
+    rate_checks = []
+    app.state.generation_service._rate = lambda *args: rate_checks.append(args)
     def provider(*args):
         calls.append(True)
         return draft(*args)
     app.state.generation_drafter = provider
     job, key, body = generate(client, ready)
     assert job["status"] == "SUCCEEDED", job
+    state = client.get(base(ready) + "/generation").json()
+    assert state["latestPlan"]["current"] is True
+    coalesced = client.post(base(ready) + "/generation/jobs", headers=headers(key=str(uuid.uuid4())), json=body)
+    assert coalesced.status_code == 200, coalesced.text
+    assert coalesced.json()["id"] == job["id"]
+    assert len(rate_checks) == 1
     replay = client.post(base(ready) + "/generation/jobs", headers=headers(key=key), json=body)
     assert replay.status_code == 202 and replay.json()["id"] == job["id"]
     assert len(calls) == 1
+    with app.state.engine.connect() as conn:
+        assert conn.scalar(text("SELECT COUNT(*) FROM generation_jobs WHERE kind='GENERATE'")) == 1
+    with app.state.engine.begin() as conn:
+        conn.execute(text("UPDATE generation_jobs SET expires_at=DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 SECOND) WHERE id=:id"), {"id": job["id"]})
+    expired_replay = client.post(base(ready) + "/generation/jobs", headers=headers(key=key), json=body)
+    assert expired_replay.status_code == 202 and expired_replay.json()["id"] == job["id"]
+    assert client.get(base(ready) + "/generation").json()["latestPlan"]["current"] is True
+
     response = client.get(base(ready) + "/plans/" + job["planId"])
     assert response.status_code == 200, response.text
     plan = response.json()
@@ -152,6 +168,25 @@ def test_complete_generation_save_refresh_and_idempotency(app, client, ready):
     with app.state.engine.connect() as conn:
         assert conn.exec_driver_sql("SELECT COUNT(*) FROM plans").scalar() == 1
         assert conn.exec_driver_sql("SELECT COUNT(*) FROM plan_versions").scalar() == 1
+
+
+def test_changed_generation_inputs_create_new_job_and_mark_old_plan_not_current(app, client, ready):
+    job, _, body = generate(client, ready)
+    assert job["status"] == "SUCCEEDED", job
+    settings = client.get(base(ready) + "/generation").json()["settings"]
+    settings["activityWindow"]["end"] = "17:00"
+    changed = client.put(base(ready) + "/generation/settings", headers=headers(), json={
+        "expectedConditionsVersion": 1, "expectedSettingsVersion": 1, "settings": settings})
+    assert changed.status_code == 200, changed.text
+    changed_state = client.get(base(ready) + "/generation").json()
+    assert changed_state["inputToken"] != body["expectedInputToken"]
+    assert changed_state["latestPlan"]["current"] is False
+    new_job = client.post(base(ready) + "/generation/jobs", headers=headers(key=str(uuid.uuid4())), json={
+        "expectedInputToken": changed_state["inputToken"], "expectedSettingsVersion": changed_state["settingsVersion"]})
+    assert new_job.status_code == 202 and new_job.json()["id"] != job["id"]
+    assert client.get(base(ready) + "/generation/jobs/" + new_job.json()["id"]).json()["status"] == "SUCCEEDED"
+    with app.state.engine.connect() as conn:
+        assert conn.scalar(text("SELECT COUNT(*) FROM generation_jobs WHERE kind='GENERATE'")) == 2
 
 
 def test_personal_edits_during_generation_leave_no_plan(app, client, ready):
@@ -275,6 +310,22 @@ def test_concurrent_retry_claims_generation_once(app, client, ready):
     assert job["status"] == "SUCCEEDED", job
     with app.state.engine.connect() as conn:
         assert conn.exec_driver_sql("SELECT COUNT(*) FROM plans").scalar() == 1
+
+
+def test_concurrent_different_keys_coalesce_to_one_generation_job(app, client, ready):
+    state = client.get(base(ready) + "/generation").json()
+    payload = {"expectedInputToken": state["inputToken"], "expectedSettingsVersion": state["settingsVersion"]}
+
+    def post_with_key(key):
+        return client.post(base(ready) + "/generation/jobs", headers=headers(key=key), json=payload)
+
+    keys = [str(uuid.uuid4()), str(uuid.uuid4())]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(post_with_key, keys))
+    assert all(response.status_code in {200, 202} for response in responses), [response.text for response in responses]
+    assert responses[0].json()["id"] == responses[1].json()["id"]
+    with app.state.engine.connect() as conn:
+        assert conn.scalar(text("SELECT COUNT(*) FROM generation_jobs WHERE kind='GENERATE'")) == 1
 
 
 def test_failure_after_plan_insert_rolls_back_plan_and_children(app, client, ready, monkeypatch):
