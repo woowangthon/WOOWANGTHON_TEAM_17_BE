@@ -53,7 +53,7 @@ def route_setup():
         c.execute(text("CREATE TABLE device_session_memberships(session_id TEXT,trip_id TEXT,member_id TEXT)"))
         c.execute(text("CREATE TABLE device_sessions(id TEXT PRIMARY KEY,revoked INTEGER)"))
         c.execute(text("CREATE TABLE places(contentid INTEGER,title TEXT,contentTypeName TEXT,planningRole TEXT,adminCity TEXT,addr1 TEXT,addr2 TEXT,mapx REAL,mapy REAL,geoValidated TEXT,tel TEXT,homepageUrl TEXT,overviewText TEXT)"))
-        c.execute(text("CREATE TABLE place_details(contentid INTEGER,openingHoursText TEXT,closedDaysText TEXT,feeText TEXT,bookingText TEXT,parkingText TEXT,menuText TEXT)"))
+        c.execute(text("CREATE TABLE place_details(contentid INTEGER,openingHoursText TEXT,closedDaysText TEXT,feeText TEXT,bookingText TEXT,parkingText TEXT,menuText TEXT,estimatedStayMinutes INTEGER)"))
         c.execute(text("CREATE TABLE trip_canvas_documents(trip_id TEXT PRIMARY KEY,revision INTEGER,schema_version INTEGER,document_json TEXT,source_plan_id TEXT,source_version_id TEXT,created_at DATETIME,updated_at DATETIME)"))
         c.execute(text("CREATE TABLE trip_canvas_requests(session_id TEXT,trip_id TEXT,member_id TEXT,kind TEXT,method TEXT,path TEXT,idempotency_key TEXT,fingerprint TEXT,status TEXT,lease_token TEXT,lease_expires_at DATETIME,result_json TEXT,created_at DATETIME,updated_at DATETIME,expires_at DATETIME,PRIMARY KEY(session_id,method,path,idempotency_key))"))
         c.execute(text("INSERT INTO trips VALUES(:t,'OPEN','trip','code')"), {"t": TRIP})

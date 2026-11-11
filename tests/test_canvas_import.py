@@ -169,3 +169,35 @@ def test_generated_capacity_overflow_is_explicit():
     document["nodes"] = [{"id": str(uuid.uuid4()), "kind": "comment", "dayId": DAY, "position": {"x": 0, "y": 0}, "color": "default", "text": "note"} for _ in range(500)]
     with pytest.raises(CanvasImportError, match="CANVAS_CAPACITY_EXCEEDED"):
         append_generated_plan(document, TRIP, PLAN, VERSION, generated_plan())
+
+
+def test_new_version_replaces_generated_route_but_keeps_personal_placements():
+    old = append_generated_plan(empty_document(), TRIP, PLAN, VERSION, generated_plan())
+    alternative = {**copy.deepcopy(old["nodes"][0]), "intent": "candidate"}
+    old["nodes"][0] = alternative
+    note = {"id": PLACE, "kind": "comment", "dayId": DAY, "position": {"x": 10, "y": 20},
+            "color": "rose", "text": "keep this note"}
+    old["nodes"].append(note)
+    next_version = str(uuid.uuid4())
+    new = append_generated_plan(old, TRIP, PLAN, next_version, generated_plan())
+    assert alternative in new["nodes"] and note in new["nodes"]
+    route = [n for n in new["nodes"] if n.get("intent") == "route"]
+    assert [n["contentid"] for n in route] == [101, 102]
+    assert all(n["source"]["versionId"] == next_version for n in route)
+    assert len(new["edges"]) == 1
+    assert set(new["edges"][0][k] for k in ("source", "target")) == {n["id"] for n in route}
+
+
+def test_reading_an_old_stacked_canvas_exposes_only_its_current_generated_route(import_app):
+    client, engine, _ = import_app
+    current = import_request(client).json()
+    obsolete = append_generated_plan(empty_document(), TRIP, PLAN, str(uuid.uuid4()), generated_plan())
+    stacked = copy.deepcopy(current["document"])
+    stacked["nodes"] += obsolete["nodes"]
+    stacked["edges"] += obsolete["edges"]
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE trip_canvas_documents SET document_json=:d WHERE trip_id=:t"),
+                     {"d": json.dumps(stacked), "t": TRIP})
+    visible = client.get(f"/api/v1/trips/{TRIP}/canvas").json()
+    assert visible["document"] == current["document"]
+    assert visible["revision"] == current["revision"]

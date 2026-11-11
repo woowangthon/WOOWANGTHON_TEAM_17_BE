@@ -33,14 +33,14 @@ def setup_app():
         c.execute(text("CREATE TABLE trip_members(id TEXT,trip_id TEXT,nickname TEXT,role TEXT,status TEXT)"))
         c.execute(text("CREATE TABLE device_session_memberships(session_id TEXT,trip_id TEXT,member_id TEXT)"))
         c.execute(text("CREATE TABLE places(contentid INTEGER,title TEXT,contentTypeName TEXT,planningRole TEXT,adminCity TEXT,addr1 TEXT,addr2 TEXT,mapx REAL,mapy REAL,geoValidated TEXT,tel TEXT,homepageUrl TEXT,overviewText TEXT)"))
-        c.execute(text("CREATE TABLE place_details(contentid INTEGER,openingHoursText TEXT,closedDaysText TEXT,feeText TEXT,bookingText TEXT,parkingText TEXT,menuText TEXT)"))
+        c.execute(text("CREATE TABLE place_details(contentid INTEGER,openingHoursText TEXT,closedDaysText TEXT,feeText TEXT,bookingText TEXT,parkingText TEXT,menuText TEXT,estimatedStayMinutes INTEGER)"))
         c.execute(text("CREATE TABLE trip_canvas_documents(trip_id TEXT PRIMARY KEY,revision INTEGER,schema_version INTEGER,document_json TEXT,source_plan_id TEXT,source_version_id TEXT,created_at DATETIME,updated_at DATETIME)"))
         c.execute(text("CREATE TABLE trip_canvas_requests(session_id TEXT,trip_id TEXT,member_id TEXT,kind TEXT,method TEXT,path TEXT,idempotency_key TEXT,fingerprint TEXT,status TEXT,lease_token TEXT,lease_expires_at DATETIME,result_json TEXT,created_at DATETIME,updated_at DATETIME,expires_at DATETIME,PRIMARY KEY(session_id,method,path,idempotency_key))"))
         c.execute(text("INSERT INTO trips VALUES(:t,'OPEN','trip','code')"), {"t": TRIP})
         c.execute(text("INSERT INTO trip_members VALUES(:m,:t,'Member','MEMBER','ACTIVE')"), {"m": MEMBER, "t": TRIP})
         c.execute(text("INSERT INTO device_session_memberships VALUES(:s,:t,:m)"), {"s": SESSION, "t": TRIP, "m": MEMBER})
         c.execute(text("INSERT INTO places VALUES(101,'Place','Museum','activity','City','Addr',NULL,127.5,36.6,'yes','010','javascript:alert(1)','overview')"))
-        c.execute(text("INSERT INTO place_details VALUES(101,'Hours','Closed','Fee','Booking','Parking','Menu')"))
+        c.execute(text("INSERT INTO place_details VALUES(101,'Hours','Closed','Fee','Booking','Parking','Menu',75)"))
 
     def find_session(conn, request):
         return {"id": SESSION} if request.cookies.get("session") == "ok" else None
@@ -95,7 +95,9 @@ def test_save_cas_and_same_key_replay(setup_app):
     assert replay.status_code == 200 and replay.json() == response.json()
     stale = client.put(f"/api/v1/trips/{TRIP}/canvas", json={**body, "expectedRevision": 0}, headers={**headers, "Idempotency-Key": str(uuid.uuid4())})
     assert stale.status_code == 409
-    assert client.get(f"/api/v1/trips/{TRIP}/canvas/places/101").json()["homepageUrl"] is None
+    detail = client.get(f"/api/v1/trips/{TRIP}/canvas/places/101").json()
+    assert detail["homepageUrl"] is None
+    assert detail["estimatedStayMinutes"] == 75
 
 
 def test_recommendation_final_auth_blocks_replay_and_paid_duplicate(setup_app):

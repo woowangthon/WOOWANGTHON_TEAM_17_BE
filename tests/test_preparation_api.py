@@ -190,7 +190,7 @@ def test_restart_restores_conditions_private_draft_and_confirmation(client, app)
         assert restarted.get(base(room) + "/preparation").json()["readiness"]["conditionsReady"] is True
 
 
-def test_new_participant_recalculates_preparation_readiness(client, app):
+def test_new_participant_does_not_block_owner_preparation_readiness(client, app):
     room = create_room(client)
     assert save_conditions(client, room).status_code == 200
     assert save_personal(client, room, cv=1).status_code == 200
@@ -198,9 +198,9 @@ def test_new_participant_recalculates_preparation_readiness(client, app):
     assert client.get(base(room) + "/preparation").json()["readiness"]["conditionsReady"] is True
     with member_client(app, room):
         prep = client.get(base(room) + "/preparation").json()
-        assert prep["readiness"]["conditionsReady"] is False
+        assert prep["readiness"]["conditionsReady"] is True
         assert prep["activeMemberCount"] == 2
-        assert {r["code"] for r in prep["readiness"]["reasons"]} == {"MEMBER_COUNT_MISMATCH", "PREFERENCES_UNCONFIRMED"}
+        assert prep["readiness"]["reasons"] == []
 
 
 @pytest.mark.parametrize("method,suffix,payload", [

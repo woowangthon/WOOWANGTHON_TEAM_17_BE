@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import inspect
 import json
 import math
 import re
@@ -52,15 +53,15 @@ def _trip_dates(snapshot) -> list[str]:
         raise GenerationDraftError("UNSUPPORTED_DRAFT_DATES") from None
 
 
-def _default_drafter(dates, candidates, fixed_visits, max_visits_per_day):
+def _default_drafter(dates, candidates, fixed_visits, max_visits_per_day, schedule_context=None):
     try:
         from chungbuk_trip_ai import draft_candidate_itinerary
     except Exception:
         raise GenerationDraftError("AI_UNAVAILABLE") from None
-    return draft_candidate_itinerary(dates, candidates, fixed_visits, max_visits_per_day)
+    return draft_candidate_itinerary(dates, candidates, fixed_visits, max_visits_per_day, schedule_context)
 
 
-def _validate(dates, candidates, fixed_visits, max_visits_per_day, result):
+def _validate(dates, candidates, fixed_visits, max_visits_per_day, result, schedule_context=None):
     try:
         from chungbuk_trip_ai import validate_candidate_itinerary
     except Exception:
@@ -71,7 +72,42 @@ def _validate(dates, candidates, fixed_visits, max_visits_per_day, result):
     if set(result) != {"days"} and any(type(result[k]) is not bool or result[k] != value for k, value in flags.items()):
         raise GenerationDraftError("AI_INVALID_DRAFT")
     return validate_candidate_itinerary(dates, candidates, fixed_visits, max_visits_per_day,
-                                        {"days": result["days"]})
+                                        {"days": result["days"]}, schedule_context)
+
+
+def _schedule_context(snapshot, common_settings, dates, catalog):
+    """Pass only confirmed clock windows and captured endpoints to the model."""
+    conditions = snapshot.as_dict()["conditions"]
+    settings = common_settings or {}
+    window = settings.get("activityWindow", {})
+    start, end = window.get("start", "09:00"), window.get("end", "20:00")
+    departure_time = conditions.get("departureTime")
+    day_windows = [{"date": day, "startTime": departure_time if index == 0 and isinstance(departure_time, str) else start,
+                   "endTime": end} for index, day in enumerate(dates)]
+    def endpoint(value):
+        if not isinstance(value, dict):
+            return None
+        return {"label": value.get("label"), "coordinate": value.get("coordinate")}
+    departure = endpoint(settings.get("departureAnchor"))
+    return_anchor = endpoint(settings.get("returnAnchor"))
+    if conditions.get("departureContentid") is not None:
+        place = catalog.presentation_place(conditions["departureContentid"])
+        if place is not None:
+            departure = {"label": place["title"], "coordinate": place.get("coordinate")}
+    if departure is None and isinstance(conditions.get("departure"), str):
+        departure = {"label": conditions["departure"], "coordinate": None}
+    if return_anchor is None and conditions.get("returnRoute"):
+        return_anchor = {"label": conditions["returnRoute"], "coordinate": None}
+    context = {"dayWindows": day_windows, "departureAnchor": departure, "returnAnchor": return_anchor}
+    times = {}
+    for group in [*settings.get("reviewedCommonFields", []), {"anchors": settings.get("confirmedScheduleAnchors", [])}]:
+        for a in group.get("anchors", []):
+            clocks = {k: a[k] for k in ("startTime", "endTime", "arrivalDeadline", "checkoutTime") if a.get(k)}
+            if clocks:
+                times[(a["date"], a["contentid"])] = {"date": a["date"], "contentid": a["contentid"], **clocks}
+    if times:
+        context["fixedTimes"] = list(times.values())
+    return context
 
 
 async def _fresh(snapshot, catalog, recapture, reload_catalog):
@@ -127,14 +163,34 @@ async def generate_candidate_draft(snapshot, normalization_result, catalog, revi
     if not selection.ready_for_draft:
         raise GenerationDraftError("CANDIDATE_REVIEW_REQUIRED")
     candidates, fixed_visits = selection.draft_candidates(), selection.fixed_visits()
+    schedule_context = _schedule_context(snapshot, common_settings, dates, catalog)
     async def propose():
         await _fresh(snapshot, catalog, recapture, reload_catalog)
         # A local provider/stub may mutate its arguments. Keep the validator's
         # original authority separate from the provider-owned request objects.
-        request_dates, request_candidates, request_visits = copy.deepcopy((dates, candidates, fixed_visits))
-        result = await asyncio.to_thread(drafter or _default_drafter, request_dates, request_candidates,
-                                         request_visits, max_visits_per_day)
-        validated = _validate(dates, candidates, fixed_visits, max_visits_per_day, result)
+        request_dates, request_candidates, request_visits, request_context = copy.deepcopy((dates, candidates, fixed_visits, schedule_context))
+        selected_drafter = drafter or _default_drafter
+        args = (request_dates, request_candidates, request_visits, max_visits_per_day)
+        try:
+            signature = inspect.signature(selected_drafter)
+            try:
+                signature.bind(*args, request_context)
+                context_mode = "positional"
+            except TypeError:
+                try:
+                    signature.bind(*args, schedule_context=request_context)
+                    context_mode = "keyword"
+                except TypeError:
+                    context_mode = None
+        except (TypeError, ValueError):
+            context_mode = "positional" if drafter is None else None
+        if context_mode == "positional":
+            result = await asyncio.to_thread(selected_drafter, *args, request_context)
+        elif context_mode == "keyword":
+            result = await asyncio.to_thread(selected_drafter, *args, schedule_context=request_context)
+        else:
+            result = await asyncio.to_thread(selected_drafter, *args)
+        validated = _validate(dates, candidates, fixed_visits, max_visits_per_day, result, schedule_context)
         await _fresh(snapshot, catalog, recapture, reload_catalog)
         return validated
 
@@ -163,6 +219,8 @@ async def generate_candidate_draft(snapshot, normalization_result, catalog, revi
         "policyDigest": selection_data["policyDigest"],
         "selectionDigest": hashlib.sha256(_canonical(selection_data).encode()).hexdigest(),
         "days": days, "requiresReview": True,
+        "mealCandidates": [{"contentid": c["contentid"], "allowedDates": c["allowedDates"]}
+                           for c in candidates if c["planningRole"] == "meal_stop"],
         "validation": {"routeVerified": False, "timeVerified": False, "budgetVerified": False,
                        "walkingVerified": False, "openingHoursVerified": False},
         "pendingValidation": selection_data["pendingValidation"],

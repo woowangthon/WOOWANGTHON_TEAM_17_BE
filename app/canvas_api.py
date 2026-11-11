@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from starlette.concurrency import run_in_threadpool
 
 from . import canvas_import, canvas_models, canvas_recommendation, preparation
@@ -128,13 +128,23 @@ def _bounded(value, maximum):
 def _place_details(conn, contentids: list[int]) -> list[dict[str, Any]]:
     if not contentids:
         return []
+    ids = list(dict.fromkeys(contentids))
+    def rows(query):
+        return conn.execute(text(query).bindparams(bindparam("ids", expanding=True)), {"ids": ids}).mappings()
+
+    places = {row["contentid"]: row for row in rows(
+        "SELECT contentid,title,contentTypeName,planningRole,adminCity,addr1,mapx,mapy,geoValidated,tel,homepageUrl,overviewText FROM places WHERE contentid IN :ids")}
+    details = {}
+    for row in rows("SELECT contentid,openingHoursText,closedDaysText,feeText,bookingText,parkingText,menuText,estimatedStayMinutes FROM place_details WHERE contentid IN :ids"):
+        details.setdefault(row["contentid"], []).append(row)
     output = []
-    for contentid in dict.fromkeys(contentids):
-        place = conn.execute(text("SELECT contentid,title,contentTypeName,planningRole,adminCity,addr1,mapx,mapy,geoValidated,tel,homepageUrl,overviewText FROM places WHERE contentid=:id"), {"id": contentid}).mappings().first()
+    for contentid in ids:
+        place = places.get(contentid)
         if not place:
             raise CanvasError("PLACE_NOT_FOUND", 404)
-        detail_rows = conn.execute(text("SELECT openingHoursText,closedDaysText,feeText,bookingText,parkingText,menuText FROM place_details WHERE contentid=:id"), {"id": contentid}).mappings().all()
+        detail_rows = details.get(contentid, [])
         detail = detail_rows[0] if len(detail_rows) == 1 else {}
+        stay = detail.get("estimatedStayMinutes")
         coordinate = None
         try:
             if _truthy_geo(place["geoValidated"]):
@@ -146,6 +156,7 @@ def _place_details(conn, contentids: list[int]) -> list[dict[str, Any]]:
         output.append({"contentid": contentid, "title": _clean(place["title"]) or "", "address": _clean(place["addr1"]),
                        "adminCity": _clean(place["adminCity"]), "category": _clean(place["contentTypeName"]),
                        "planningRole": _clean(place["planningRole"]), "coordinate": coordinate,
+                       "estimatedStayMinutes": stay if type(stay) is int and 1 <= stay <= 1440 else None,
                        "overviewText": _clean(place["overviewText"]), "menuText": _clean(detail.get("menuText")),
                        "openingHoursText": _clean(detail.get("openingHoursText")), "closedDaysText": _clean(detail.get("closedDaysText")),
                        "feeText": _clean(detail.get("feeText")), "bookingText": _clean(detail.get("bookingText")),
@@ -235,6 +246,8 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
         saved = saved if saved is not None else store.load_document(conn, trip_id)
         revision = saved["revision"] if saved else 0
         document = saved["document"] if saved else _day_document(conn, trip_id)
+        if saved and saved["sourcePlan"]:
+            document = canvas_import.current_route_document(document, saved["sourcePlan"]["versionId"])
         refs = [n["contentid"] for n in document["nodes"] if n["kind"] == "place"]
         places = _place_details(conn, refs)
         return {"tripId": trip_id, "revision": revision, "document": document, "places": places,

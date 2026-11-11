@@ -71,6 +71,19 @@ def test_draft_joins_only_catalog_facts_and_preserves_detached_unverified_status
     assert "source" not in repr(result)
 
 
+def test_four_argument_provider_with_kwargs_receives_context_as_keyword(inputs):
+    observed = {}
+    def provider(dates, candidates, anchors, maximum, **kwargs):
+        observed.update(kwargs)
+        return RAW_DRAFT
+    invoke(inputs, drafter=provider)
+    context = observed["schedule_context"]
+    assert context["dayWindows"] == [
+        {"date": DATES[0], "startTime": "09:00", "endTime": "20:00"},
+        {"date": DATES[1], "startTime": "09:00", "endTime": "20:00"},
+    ]
+
+
 def test_unreviewed_selection_never_calls_provider(inputs, monkeypatch):
     selection = Selection()
     selection.ready_for_draft = False

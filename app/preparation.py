@@ -307,25 +307,24 @@ def _validated(call: Callable, ApiError):
         _api_error(exc, ApiError)
 
 
-def _members_readiness(conn, trip_id: str, conditions: dict[str, Any], conditions_version: int, active_count: int):
+def _members_readiness(conn, trip_id: str, conditions: dict[str, Any], conditions_version: int):
     members = conn.execute(text("SELECT id,nickname,role,created_at FROM trip_members WHERE trip_id=:t AND status='ACTIVE' ORDER BY CASE WHEN role='OWNER' THEN 0 ELSE 1 END,created_at,id FOR UPDATE"), {"t": trip_id}).mappings().all()
     docs = conn.execute(text("SELECT member_id,preference_version,confirmed_conditions_version,confirmed_preference_version,confirmed_at FROM member_preparation_documents WHERE trip_id=:t FOR UPDATE"), {"t": trip_id}).mappings().all()
     by_member = {r["member_id"]: r for r in docs}
     response_members = []
-    unconfirmed = []
+    owner_pending = None
     for member in members:
         doc = by_member.get(member["id"])
         confirmed = bool(doc and doc["confirmed_at"] is not None and doc["confirmed_conditions_version"] == conditions_version and doc["confirmed_preference_version"] == doc["preference_version"])
         response_members.append({"id": member["id"], "nickname": member["nickname"], "role": member["role"], "preparationStatus": "confirmed" if confirmed else "writing"})
-        if not confirmed:
-            unconfirmed.append(member["id"])
+        if member["role"] == "OWNER" and not confirmed:
+            owner_pending = member["id"]
     incomplete = [key for key in ("region", "startDate", "endDate", "expectedPeople", "budget", "transport") if conditions.get(key) is None]
     reasons: list[dict[str, Any]] = []
     if incomplete:
         reasons.append({"code": "CONDITIONS_INCOMPLETE", "fields": incomplete})
-    if conditions.get("expectedPeople") is not None and conditions["expectedPeople"] != active_count:
-        reasons.append({"code": "MEMBER_COUNT_MISMATCH"})
-    reasons.extend({"code": "PREFERENCES_UNCONFIRMED", "memberId": mid} for mid in unconfirmed)
+    if owner_pending or not any(member["role"] == "OWNER" for member in members):
+        reasons.append({"code": "PREFERENCES_UNCONFIRMED", **({"memberId": owner_pending} if owner_pending else {})})
     return response_members, {"conditionsReady": not reasons, "reasons": reasons}
 
 
@@ -369,7 +368,7 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
             conditions, version = _conditions(conn, trip_id)
             rows = conn.execute(text("SELECT COUNT(*) FROM trip_members WHERE trip_id=:t AND status='ACTIVE'"), {"t": trip_id}).scalar()
             active_count = int(rows or 0)
-            members, readiness = _members_readiness(conn, trip_id, conditions, version, active_count)
+            members, readiness = _members_readiness(conn, trip_id, conditions, version)
             return {"trip": {"id": trip["id"], "name": trip["name"], "status": trip["status"], "inviteCode": trip["invite_code"]},
                     "currentMember": {"id": member["id"], "nickname": member["nickname"], "role": member["role"]},
                     "canEditConditions": member["role"] == "OWNER", "conditionsVersion": version,

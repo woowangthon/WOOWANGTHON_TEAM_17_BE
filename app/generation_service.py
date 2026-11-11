@@ -40,7 +40,7 @@ def _canonical(value):
 
 
 def _default_settings():
-    return {"activityWindow": {"start": "09:00", "end": "18:00"}, "departureAnchor": None,
+    return {"activityWindow": {"start": "09:00", "end": "20:00"}, "departureAnchor": None,
             "returnAnchor": None, "reviewedCommonFields": []}
 
 
@@ -91,48 +91,66 @@ class GenerationService:
                    for field in ("lodging", "fixedSchedule"))
 
     def _source_token(self, conn, trip_id, cv, catalog_digest, settings_version):
-        members = conn.execute(text("SELECT id,nickname FROM trip_members WHERE trip_id=:t AND status='ACTIVE' ORDER BY CASE WHEN role='OWNER' THEN 0 ELSE 1 END,created_at,id FOR UPDATE"), {"t": trip_id}).mappings().all()
-        docs = conn.execute(text("SELECT member_id,draft_json,preference_version,confirmed_conditions_version,confirmed_preference_version,confirmed_at FROM member_preparation_documents WHERE trip_id=:t FOR UPDATE"), {"t": trip_id}).mappings().all()
+        members = conn.execute(text("SELECT id,nickname,role FROM trip_members WHERE trip_id=:t AND status='ACTIVE' ORDER BY CASE WHEN role='OWNER' THEN 0 ELSE 1 END,created_at,id FOR UPDATE"), {"t": trip_id}).mappings().all()
+        docs = conn.execute(text("SELECT member_id,preference_version,confirmed_conditions_version,confirmed_preference_version,confirmed_at FROM member_preparation_documents WHERE trip_id=:t FOR UPDATE"), {"t": trip_id}).mappings().all()
         docmap = {str(r["member_id"]): r for r in docs}
         personal = []
         statuses = []
         for m in members:
             mid = str(m["id"]); d = docmap.get(mid)
             confirmed = bool(d and d["confirmed_at"] and int(d["confirmed_conditions_version"] or 0) == cv and int(d["confirmed_preference_version"] or 0) == int(d["preference_version"]))
-            source_document_digest = None
             schedule_ready = True
-            if d:
+            source_document_digest = None
+            required_ready = True
+            if confirmed:
                 try:
-                    draft = preparation.validate_draft({**_json(d["draft_json"]), "scheduleItems": _json(d["draft_json"]).get("scheduleItems", [])})
+                    draft_row = conn.execute(text("SELECT draft_json FROM member_preparation_documents WHERE trip_id=:t AND member_id=:m"), {"t": trip_id, "m": mid}).mappings().first()
+                    if not draft_row:
+                        raise ValueError("missing confirmed document")
+                    raw_draft = _json(draft_row["draft_json"])
+                    draft = preparation.validate_draft({**raw_draft, "scheduleItems": raw_draft.get("scheduleItems", [])})
                     source_document_digest = hashlib.sha256(_canonical(draft).encode()).hexdigest()
+                    if m["role"] == "OWNER":
+                        required_ready = bool(draft["likes"] and draft["walking"] in preparation.WALKING)
                     _, unresolved = preparation._schedule_clarifications(conn, draft["scheduleItems"])
                     schedule_ready = not unresolved
                 except Exception:
                     source_document_digest = "invalid"
                     schedule_ready = False
+                    required_ready = False
             status = "confirmed" if confirmed else "writing"
             statuses.append({"id": mid, "nickname": m["nickname"], "status": status})
-            personal.append({"memberId": mid, "preferenceVersion": int(d["preference_version"]) if d else 0,
-                             "confirmed": confirmed,
-                             "confirmedConditionsVersion": int(d["confirmed_conditions_version"]) if d and d["confirmed_conditions_version"] is not None else None,
-                             "confirmedPreferenceVersion": int(d["confirmed_preference_version"]) if d and d["confirmed_preference_version"] is not None else None,
-                             "sourceDocumentDigest": source_document_digest, "scheduleReady": schedule_ready})
+            # Unconfirmed drafts are private editing state. They do not enter the
+            # generation token or scheduling readiness until the member confirms.
+            if confirmed:
+                personal.append({"memberId": mid, "role": str(m["role"]), "preferenceVersion": int(d["preference_version"]),
+                                 "confirmed": True,
+                                 "confirmedConditionsVersion": int(d["confirmed_conditions_version"]),
+                                 "confirmedPreferenceVersion": int(d["confirmed_preference_version"]),
+                                 "sourceDocumentDigest": source_document_digest, "scheduleReady": schedule_ready,
+                                 "requiredReady": required_ready})
         stamp = {"policyVersion": confirmed_preferences.POLICY_VERSION, "conditionsVersion": cv,
                  "members": personal, "settingsVersion": settings_version, "catalogDigest": catalog_digest}
         return hashlib.sha256(_canonical(stamp).encode()).hexdigest(), statuses, personal
 
     def _confirmed_issues(self, conn, trip_id, catalog, common_settings=None):
         from .candidate_selection import build_supported_tags
+        _, conditions_version = preparation._conditions(conn, trip_id)
         members = conn.execute(text("SELECT id,role FROM trip_members WHERE trip_id=:t AND status='ACTIVE' ORDER BY created_at,id FOR UPDATE"), {"t": trip_id}).mappings().all()
-        docs = conn.execute(text("SELECT member_id,draft_json FROM member_preparation_documents WHERE trip_id=:t FOR UPDATE"), {"t": trip_id}).mappings().all()
+        docs = conn.execute(text("SELECT member_id,preference_version,confirmed_conditions_version,confirmed_preference_version,confirmed_at FROM member_preparation_documents WHERE trip_id=:t FOR UPDATE"), {"t": trip_id}).mappings().all()
         by_member = {str(r["member_id"]): r for r in docs}
         tags = build_supported_tags(catalog)
         issues = set()
         for member in members:
             doc = by_member.get(str(member["id"]))
-            if not doc: continue
+            if not doc or not foundation._confirmed_doc(doc, conditions_version): continue
             try:
-                draft = preparation.validate_draft({**_json(doc["draft_json"]), "scheduleItems": _json(doc["draft_json"]).get("scheduleItems", [])})
+                draft_row = conn.execute(text("SELECT draft_json FROM member_preparation_documents WHERE trip_id=:t AND member_id=:m"),
+                                         {"t": trip_id, "m": str(member["id"])}).mappings().first()
+                if not draft_row:
+                    issues.add("PREPARATION_NOT_READY"); continue
+                raw_draft = _json(draft_row["draft_json"])
+                draft = preparation.validate_draft({**raw_draft, "scheduleItems": raw_draft.get("scheduleItems", [])})
             except Exception:
                 issues.add("PREPARATION_NOT_READY"); continue
             if member["role"] != "OWNER" and any(item["scope"] == "group" for item in draft["scheduleItems"]):
@@ -169,12 +187,9 @@ class GenerationService:
             ready, reasons = True, []
             if not all(conditions.get(k) is not None for k in ("region", "startDate", "endDate", "expectedPeople", "budget", "transport")):
                 ready = False; reasons.append({"code": "CONDITIONS_INCOMPLETE"})
-            active = len(statuses)
-            if conditions.get("expectedPeople") != active:
-                ready = False; reasons.append({"code": "MEMBER_COUNT_MISMATCH"})
-            if not all(x["confirmed"] for x in personal):
+            if not any(x["role"] == "OWNER" and x["requiredReady"] for x in personal):
                 ready = False; reasons.append({"code": "PREFERENCES_UNCONFIRMED"})
-            if not all(x["scheduleReady"] for x in personal):
+            if any(not x["scheduleReady"] for x in personal):
                 ready = False; reasons.append({"code": "SCHEDULE_ITEM_CLARIFICATION_REQUIRED"})
             for issue in self._confirmed_issues(conn, trip_id, catalog, settings):
                 ready = False; reasons.append({"code": issue})
@@ -189,7 +204,9 @@ class GenerationService:
                 if rec: plan = {"planId": rec["id"], "versionId": rec["version_id"], "status": rec["status"]}
             conn.commit()
             return {"conditionsVersion": cv, "inputToken": token, "settingsVersion": sv, "settings": settings,
-                    "preparationMembers": statuses, "reviewMembers": statuses,
+                    "preparationMembers": statuses,
+                    "reviewMembers": [{**m, "status": "reviewed" if m["status"] == "confirmed" else "stale"}
+                                      for m in statuses],
                     "readyForGeneration": bool(ready and actor["role"] == "OWNER"),
                     "reasons": reasons, "latestJob": self._job_public(latest) if latest else None, "latestPlan": plan}
         except ServiceError:
@@ -515,7 +532,9 @@ class GenerationService:
             if set(body) != {"expectedInputToken", "expectedSettingsVersion"} or body["expectedInputToken"] != token: raise ServiceError("STALE_GENERATION_INPUT")
             if body["expectedSettingsVersion"] != sv: raise ServiceError("VERSION_CONFLICT")
             current_settings = self._settings(conn, trip_id, cv)[1]
-            if not personal or not all(x["confirmed"] for x in personal): raise ServiceError("PREFERENCES_UNCONFIRMED")
+            if any(conditions.get(k) is None for k in ("region", "startDate", "endDate", "expectedPeople", "budget", "transport")):
+                raise ServiceError("CONDITIONS_INCOMPLETE")
+            if not any(x["role"] == "OWNER" and x["requiredReady"] for x in personal): raise ServiceError("PREFERENCES_UNCONFIRMED")
             if not all(x["scheduleReady"] for x in personal): raise ServiceError("SCHEDULE_ITEM_CLARIFICATION_REQUIRED")
             issues = self._confirmed_issues(conn, trip_id, catalog, current_settings)
             if issues: raise ServiceError(issues[0])
@@ -552,6 +571,7 @@ class GenerationService:
         except Exception as exc:
             code = getattr(exc, "code", None) or (str(exc) if isinstance(exc, ValueError) else None)
             mapping = {"AI_INVALID_DRAFT": "AI_INVALID_RESPONSE", "INVALID_NORMALIZATION_RESULT": "AI_INVALID_RESPONSE",
+                       "SCHEDULE_WINDOW_INFEASIBLE": "SCHEDULE_WINDOW_INFEASIBLE",
                        "INVALID_CANDIDATE_SELECTION_INPUT": "AI_INVALID_RESPONSE", "STALE_REVIEW": "REVIEW_REQUIRED",
                        "CANDIDATE_REVIEW_REQUIRED": "REVIEW_REQUIRED", "AI_DRAFT_FAILED": "AI_UNAVAILABLE",
                        "AI_TIMEOUT": "AI_TIMEOUT", "AI_UNAVAILABLE": "AI_UNAVAILABLE",
@@ -644,9 +664,9 @@ class GenerationService:
             conn.execute(text("UPDATE generation_jobs SET phase='validating' WHERE id=:id AND lease_token=:token AND status='RUNNING'"), {"id": job_id, "token": token}); conn.commit()
         finally: conn.close()
         # Root's validator and router own all route/time checks and public node IDs.
-        from .plan_validation import validate_generated_plan
+        from .day_schedule import build_scheduled_plan
         router = self.app.state.generation_router
-        document = validate_generated_plan(draft, catalog, snapshot.as_dict()["conditions"], remapped_prefs,
+        document = build_scheduled_plan(draft, catalog, snapshot.as_dict()["conditions"], remapped_prefs,
                                            gen_settings, router, timeout_seconds=90)
         if time.monotonic() >= deadline: raise ServiceError("AI_TIMEOUT", 504)
         conn = self._conn()
@@ -698,7 +718,7 @@ class GenerationService:
     def _fail_job(self, job_id, code, token):
         conn = self._conn()
         try:
-            safe = code if code in {"STALE_GENERATION_INPUT", "STALE_PLACE_CATALOG", "REVIEW_REQUIRED", "PROCESS_INTERRUPTED", "AI_TIMEOUT", "AI_UNAVAILABLE", "AI_INVALID_RESPONSE", "VALIDATION_FAILED", "REQUIRED_PREFERENCE_UNSUPPORTED", "REQUIRED_PREFERENCE_UNSATISFIED", "PREFERENCES_UNCONFIRMED", "SCHEDULE_ITEM_CLARIFICATION_REQUIRED", "LODGING_ANCHOR_REQUIRED", "FIXED_SCHEDULE_ANCHOR_REQUIRED"} else "GENERATION_UNAVAILABLE"
+            safe = code if code in {"SCHEDULE_WINDOW_INFEASIBLE", "STALE_GENERATION_INPUT", "STALE_PLACE_CATALOG", "REVIEW_REQUIRED", "PROCESS_INTERRUPTED", "AI_TIMEOUT", "AI_UNAVAILABLE", "AI_INVALID_RESPONSE", "VALIDATION_FAILED", "REQUIRED_PREFERENCE_UNSUPPORTED", "REQUIRED_PREFERENCE_UNSATISFIED", "PREFERENCES_UNCONFIRMED", "SCHEDULE_ITEM_CLARIFICATION_REQUIRED", "LODGING_ANCHOR_REQUIRED", "FIXED_SCHEDULE_ANCHOR_REQUIRED"} else "GENERATION_UNAVAILABLE"
             status = "STALE" if safe.startswith("STALE_") else "FAILED"
             conn.execute(text("UPDATE generation_jobs SET status=:status,phase='failed',error_code=:code,lease_expires_at=:n WHERE id=:id AND status='RUNNING' AND lease_token=:token"), {"status": status, "code": safe, "n": _now(), "id": job_id, "token": token}); conn.commit()
         finally: conn.close()

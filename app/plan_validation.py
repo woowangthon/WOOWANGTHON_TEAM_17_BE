@@ -30,6 +30,11 @@ def _domain(reasons, violated=False):
             "reasonCodes": sorted(set(reasons))}
 
 
+def is_late_booking(anchor, closing):
+    return any(anchor.get(field) and _clock(closing.date().isoformat(), anchor[field]) >= closing
+               for field in ("startTime", "endTime"))
+
+
 def _price(detail, people):
     """Only explicit free/per-person/group literals, never numbers from prose."""
     text = (detail or {}).get("feeText")
@@ -111,7 +116,7 @@ def _route_facts(router, origin, destination, mode):
         return unknown_route(mode, "ROUTE_RESPONSE_INVALID")
 
 
-def validate_generated_plan(draft, catalog, conditions, preferences, settings, router=None, timeout_seconds=90):
+def validate_generated_plan(draft, catalog, conditions, preferences, settings, router=None, timeout_seconds=90, *, planned_slots=None):
     """Validate a detached candidate draft; unresolved facts stay null, not invented."""
     if hasattr(draft, "as_dict"):
         draft = draft.as_dict()
@@ -260,6 +265,9 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
             if anchor.get("startTime"):
                 target = _clock(day, anchor["startTime"])
                 cursor_time = max(cursor_time, target) if cursor_time is not None else (None if anchor.get("kind") == "lodging" else target)
+            slot = (planned_slots or {}).get(day, {}).get(cid)
+            if slot and cursor_time is not None:
+                cursor_time = max(cursor_time, slot[0])
             visit_start = cursor_time
             node["estimatedStartAt"] = _iso(cursor_time)
             detail_rows = details.get(cid, [])
@@ -292,9 +300,14 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
                 cursor_time += timedelta(minutes=duration)
             else:
                 cursor_time = None
-                reasons["time"].append("STAY_DURATION_UNKNOWN")
+                if duration is None:
+                    reasons["time"].append("MEAL_DURATION_UNKNOWN" if roles.get(cid) == "meal_stop" else "STAY_DURATION_UNKNOWN")
             node["estimatedEndAt"] = _iso(cursor_time)
-            if cursor_time is not None and cursor_time > closing and not overnight_stay:
+            late_booking = planned_slots is not None and is_late_booking(anchor, closing)
+            if ending and planned_slots is not None and previous:
+                late_booking = any(a.get("date") == day and a.get("contentid") == previous.get("contentid")
+                                   and is_late_booking(a, closing) for a in anchors.values())
+            if cursor_time is not None and cursor_time > closing and not overnight_stay and not late_booking:
                 fail("time", "ACTIVITY_WINDOW_EXCEEDED", day, cid)
             if not ending:
                 price = _price(detail, people)

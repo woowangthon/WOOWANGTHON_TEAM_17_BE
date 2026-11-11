@@ -1,4 +1,4 @@
-"""Append real generated PLACE nodes without replacing collaborative edits."""
+"""Import the current generated route alongside the room's own cards and notes."""
 from __future__ import annotations
 
 import copy
@@ -25,15 +25,59 @@ def imported_node_id(version_id, node_id):
 
 
 def _metadata(plan_id, version_id, node):
+    start, end = node.get("estimatedStartAt"), node.get("estimatedEndAt")
+    if (not start or not end) and node.get("plannedStartAt") and node.get("plannedEndAt"):
+        start, end = node["plannedStartAt"], node["plannedEndAt"]
     return {"source": {"planId": plan_id, "versionId": version_id, "nodeId": node["id"]},
-            "schedule": {"startAt": _timestamp(node.get("estimatedStartAt")), "endAt": _timestamp(node.get("estimatedEndAt")),
+            "schedule": {"startAt": _timestamp(start), "endAt": _timestamp(end),
                          "locked": node.get("locked") is True}}
 
 
+def _route_position(index, y):
+    row, column = divmod(index, 2)
+    return {"x": 100 + (1 - column if row % 2 else column) * 270, "y": y + row * 185}
+
+
+def current_route_document(document, version_id):
+    """Legacy canvases may contain several imports of the same day's route."""
+    obsolete = {
+        node["id"] for node in document["nodes"]
+        if node.get("intent") == "route" and node.get("source")
+        and node["source"]["versionId"] != version_id
+    }
+    if not obsolete:
+        return document
+    nodes = [n for n in document["nodes"] if n["id"] not in obsolete]
+    # Old imports allocated a horizontal row below all previous versions. Compact
+    # only untouched rows in a stacked legacy document; retain custom placement.
+    positions = {}
+    for day in document["days"]:
+        day_nodes = [n for n in nodes if n["dayId"] == day["id"]]
+        managed = sorted((n for n in day_nodes if n.get("intent") == "route" and n.get("source")),
+                         key=lambda n: n["position"]["x"])
+        if len(managed) <= 2 or any(n["position"] != {"x": 100 + i * 270, "y": managed[0]["position"]["y"]}
+                                    for i, n in enumerate(managed)):
+            continue
+        manual = [n for n in day_nodes if not (n.get("intent") == "route" and n.get("source"))]
+        first_y = max((n["position"]["y"] + 220 for n in manual), default=100)
+        if first_y + ((len(managed) - 1) // 2) * 185 <= 100000:
+            positions.update({n["id"]: _route_position(i, first_y) for i, n in enumerate(managed)})
+    return {**document,
+            "nodes": [{**n, "position": positions[n["id"]]} if n["id"] in positions else n for n in nodes],
+            "edges": [e for e in document["edges"] if e["source"] not in obsolete and e["target"] not in obsolete]}
+
+
 def append_generated_plan(document, trip_id, plan_id, version_id, plan):
-    """Pure append. Idempotency/tombstones are handled by the surrounding transaction."""
-    result = copy.deepcopy(document)
+    """Replace the previous generated route; a version-level marker protects replays."""
+    result = copy.deepcopy(current_route_document(document, version_id))
     original_count = len(result["nodes"])
+    keep_days = {n["dayId"] for n in result["nodes"]}
+    new_dates = {day["date"] for day in plan["days"]}
+    # Discard empty frames from a previous trip range, including the initial undated frame.
+    # User-created day IDs and frames containing any retained card survive regeneration.
+    result["days"] = [d for d in result["days"]
+                      if d["id"] in keep_days or d["date"] in new_dates
+                      or d["id"] != str(uuid.uuid5(uuid.UUID(trip_id), "canvas-day:" + (d["date"] or "empty")))]
     days_by_date = {day["date"]: day["id"] for day in result["days"] if day["date"]}
     try:
         canonical_uuid(plan_id)
@@ -56,7 +100,7 @@ def append_generated_plan(document, trip_id, plan_id, version_id, plan):
                 node_id = imported_node_id(version_id, original)
                 mapped[original] = node_id
                 result["nodes"].append({"id": node_id, "kind": "place", "dayId": day_id,
-                                        "position": {"x": 100 + (len(mapped) - 1) * 270, "y": y},
+                                        "position": _route_position(len(mapped) - 1, y),
                                         "color": "default", "contentid": node["contentid"], "intent": "route",
                                         **_metadata(plan_id, version_id, node)})
             for edge in day["edges"]:

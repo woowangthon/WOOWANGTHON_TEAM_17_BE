@@ -144,6 +144,15 @@ def test_missing_origin_does_not_create_an_arrival_chain():
     assert result["validation"]["route"]["status"] == "unknown"
 
 
+def test_meal_without_catalog_stay_duration_stays_unknown_not_zero():
+    catalog = Catalog()
+    catalog.places = [{"contentid": 11, "planningRole": "meal_stop"}]
+    catalog.details = [{"contentid": 11, "estimatedStayMinutes": None}]
+    result = run_validation(catalog=catalog)
+    assert result["days"][0]["nodes"][1]["stayMinutes"] is None
+    assert "MEAL_DURATION_UNKNOWN" in result["validation"]["warnings"]
+
+
 def test_deadline_window_closure_and_known_budget_violation_are_hard_failures():
     catalog = Catalog()
     catalog.details = [{"contentid": 11, "estimatedStayMinutes": 60, "feeText": "1인 2000원", "openingHoursText": "09:00~09:30"}]

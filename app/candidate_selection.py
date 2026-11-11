@@ -119,7 +119,7 @@ class CandidateSelection:
         return json.loads(self._document)
 
     def draft_candidates(self) -> list[dict[str, Any]]:
-        allowed = {"contentid", "title", "planningRole", "adminCity", "allowedDates", "groupScore", "coordinate"}
+        allowed = {"contentid", "title", "planningRole", "adminCity", "allowedDates", "groupScore", "coordinate", "estimatedStayMinutes"}
         return [{k: v for k, v in row.items() if k in allowed}
                 for row in json.loads(self._document)["eligible"]]
 
@@ -490,6 +490,9 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                     "coordinate": coord, "allowedDates": allowed, "groupScore": mean,
                     "minimumMemberScore": minimum, "memberScores": member_scores,
                     "matchedTags": sorted(tags), "unknownTerms": unknown_terms}
+            stay = (detail or {}).get("estimatedStayMinutes")
+            if type(stay) is int and 1 <= stay <= 1440:
+                item["estimatedStayMinutes"] = stay
             item["feeLabel"] = "요금 확인 필요"
             for key, source in (("feeLabel", detail), ("openingHoursText", detail)):
                 if source and isinstance(source.get("feeText" if key == "feeLabel" else key), str) and source.get("feeText" if key == "feeLabel" else key).strip():
@@ -518,6 +521,26 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                         del selected[worst["contentid"]]
                 if len(selected) < maxc:
                     selected[cid] = eligible_by_id[cid]
+        # Keep meal candidates available to the planner even when their group
+        # score ranks behind a large sightseeing pool. The public pool remains
+        # bounded and all hard filters above still apply.
+        # Lunch, dinner and one alternative in case a proposed restaurant is closed.
+        meal_target = min(3 * len(day_strings), max(0, maxc - len(anchor_ids)))
+        meal_rows = [x for x in pool if x["planningRole"] == "meal_stop"]
+        selected_meals = [x for x in selected.values() if x["planningRole"] == "meal_stop"]
+        for meal in meal_rows:
+            if len(selected_meals) >= meal_target:
+                break
+            if meal["contentid"] in selected:
+                continue
+            replaceable = [x for x in selected.values()
+                           if x["contentid"] not in anchor_ids and x["planningRole"] != "meal_stop"]
+            if not replaceable:
+                break
+            worst = min(replaceable, key=lambda x: (x["minimumMemberScore"], x["groupScore"], -x["contentid"]))
+            del selected[worst["contentid"]]
+            selected[meal["contentid"]] = meal
+            selected_meals.append(meal)
         candidate_public = sorted(selected.values(), key=lambda x: (-x["minimumMemberScore"], -x["groupScore"], x["contentid"]))
         result = {"sourceFingerprint": snapshot.fingerprint, "catalogDigest": catalog.digest,
                   "normalizationDigest": ndigest, "policyDigest": pdigest, "eligible": candidate_public,

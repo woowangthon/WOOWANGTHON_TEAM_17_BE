@@ -107,6 +107,20 @@ def generate(client, room):
     return job.json(), key, payload
 
 
+def test_unconfirmed_member_draft_does_not_change_generation_input_token(app, client, ready):
+    initial = client.get(base(ready) + "/generation").json()
+    with member_client(app, ready) as (member, _):
+        assert member.get(base(ready) + "/generation").json()["inputToken"] == initial["inputToken"]
+        first = save_personal(member, ready, cv=1, pv=0, likes="쇼핑", walking="20")
+        assert first.status_code == 200, first.text
+        after_first = member.get(base(ready) + "/generation").json()
+        assert after_first["inputToken"] == initial["inputToken"]
+        second = save_personal(member, ready, cv=1, pv=1, likes="문화", walking="40")
+        assert second.status_code == 200, second.text
+        after_second = member.get(base(ready) + "/generation").json()
+        assert after_second["inputToken"] == initial["inputToken"]
+
+
 def test_complete_generation_save_refresh_and_idempotency(app, client, ready):
     calls = []
     def provider(*args):

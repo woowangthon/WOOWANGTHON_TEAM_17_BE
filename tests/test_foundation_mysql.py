@@ -97,6 +97,17 @@ def test_mysql_capture_rejects_unconfirmed_and_nonowner(client, app):
             capture_confirmed_preparation(app.state.engine, room["trip"]["id"], authorizer(other))
 
 
+def test_mysql_capture_uses_owner_and_only_other_current_confirmations(client, app):
+    room, authorize = ready_owner(client)
+    with member_client(app, room):
+        pass
+    snapshot = capture_confirmed_preparation(app.state.engine, room["trip"]["id"], authorize)
+    prefs = snapshot.confirmed_preferences()
+    assert len(prefs) == 1
+    assert prefs[0]["memberRef"] == "p1"
+    assert "memberId" not in prefs[0]
+
+
 def test_mysql_real_ai_adapter_preserves_confirmed_walking_and_review_boundary(client, app, monkeypatch):
     from chungbuk_trip_ai import normalization
     from chungbuk_trip_ai.gemini import GeminiSettings
