@@ -98,10 +98,13 @@ def route_setup():
     engine.dispose()
 
 
-def request_route(client, source=101, target=102, cv=2):
-    return client.get(f"/api/v1/trips/{TRIP}/canvas/route", params={
+def request_route(client, source=101, target=102, cv=2, mode=None):
+    params = {
         "sourceContentid": source, "targetContentid": target, "expectedConditionsVersion": cv,
-    })
+    }
+    if mode is not None:
+        params["mode"] = mode
+    return client.get(f"/api/v1/trips/{TRIP}/canvas/route", params=params)
 
 
 def test_route_response_exact_shape_direction_mode_and_cache(route_setup):
@@ -134,6 +137,39 @@ def test_route_stale_conditions_rejected_before_provider(route_setup):
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "STALE_ROUTE_INPUT"
     assert router.calls == []
+
+
+def test_explicit_mode_override_uses_router_and_is_separate_in_cache(route_setup):
+    client, _, router = route_setup
+    walk = request_route(client, mode="walk")
+    assert walk.status_code == 200 and walk.json()["mode"] == "walk"
+    assert walk.json()["status"] == "verified" and router.calls[-1][2] == "walk"
+    assert request_route(client, mode="walk").json() == walk.json()
+    assert len(router.calls) == 1
+    transit = request_route(client, mode="transit")
+    assert transit.status_code == 200 and transit.json()["mode"] == "transit"
+    assert router.calls[-1][2] == "transit" and len(router.calls) == 2
+
+
+def test_explicit_unknown_mode_is_rejected_without_provider(route_setup):
+    client, _, router = route_setup
+    response = request_route(client, mode="bicycle")
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert router.calls == []
+
+
+def test_explicit_mode_still_rechecks_shared_conditions(route_setup):
+    client, engine, router = route_setup
+    def change_conditions():
+        with engine.begin() as c:
+            c.execute(text("UPDATE trip_preparation_documents SET conditions_version=3,conditions_json=:j WHERE trip_id=:t"),
+                      {"j": json.dumps({"transport": "transit"}), "t": TRIP})
+    router.on_call = change_conditions
+    response = request_route(client, mode="walk")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "STALE_ROUTE_INPUT"
+    assert router.calls[0][2] == "walk"
 
 
 @pytest.mark.parametrize("mode", ["charter", None])

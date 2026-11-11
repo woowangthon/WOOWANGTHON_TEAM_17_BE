@@ -134,7 +134,13 @@ def register_canvas_route(app: FastAPI, engine, *, find_session, cookie_name, se
                               maximum=INT32_MAX, field="sourceContentid")
         target_id = parse_int(request.query_params.get("targetContentid"), signed=True,
                               maximum=INT32_MAX, field="targetContentid")
-        if set(request.query_params.keys()) != {"sourceContentid", "targetContentid", "expectedConditionsVersion"}:
+        requested_mode = request.query_params.get("mode")
+        allowed_query_keys = {"sourceContentid", "targetContentid", "expectedConditionsVersion"}
+        if "mode" in request.query_params:
+            allowed_query_keys.add("mode")
+            if requested_mode not in ROUTE_MODES:
+                raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.", {"mode": "지원 모드를 확인해 주세요."})
+        if set(request.query_params.keys()) != allowed_query_keys:
             raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.")
 
         snapshot_conn = engine.connect()
@@ -148,8 +154,9 @@ def register_canvas_route(app: FastAPI, engine, *, find_session, cookie_name, se
                     hydrated = _place_details(snapshot_conn, [source_id, target_id])
                     by_contentid = {place["contentid"]: place for place in hydrated}
                     source, target = by_contentid[source_id], by_contentid[target_id]
-                    mode = conditions.get("transport")
-                    mode = mode if mode in ROUTE_MODES else None
+                    shared_mode = conditions.get("transport")
+                    shared_mode = shared_mode if shared_mode in ROUTE_MODES else None
+                    mode = requested_mode if requested_mode is not None else shared_mode
                     actor_session_id = session["id"]
                     actor_member_id = member["id"]
                     source_coord = source["coordinate"]
@@ -201,10 +208,10 @@ def register_canvas_route(app: FastAPI, engine, *, find_session, cookie_name, se
                 with final_conn.begin():
                     final_session, _, final_member = _access(final_conn, request, trip_id, find_session, cookie_name)
                     conditions, final_version = preparation._conditions(final_conn, trip_id)
-                    final_mode = conditions.get("transport")
-                    final_mode = final_mode if final_mode in ROUTE_MODES else None
+                    final_shared_mode = conditions.get("transport")
+                    final_shared_mode = final_shared_mode if final_shared_mode in ROUTE_MODES else None
                     if (final_version != expected_version or final_version != current_version
-                            or final_mode != mode or final_session["id"] != actor_session_id
+                            or final_shared_mode != shared_mode or final_session["id"] != actor_session_id
                             or final_member["id"] != actor_member_id):
                         raise CanvasError("STALE_ROUTE_INPUT", 409)
                     final_places = _place_details(final_conn, [source_id, target_id])
