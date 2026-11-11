@@ -1,10 +1,12 @@
 # 생성 결과를 공동 캔버스로 연결
 
-기간을 늘려 새 버전을 가져오면 모든 새 날짜의 생성 동선을 교체·추가한다. 버전 4에서 기존 자동 날짜 프레임 사이의 순차 연결이 온전히 남아 있으면 새 날짜와 이어지는 연결만 추가한다. 명시적으로 지운 연결, 사용자 순서·날짜, 빈 연결 목록과 이미 가져온 버전의 재호출은 기존 상태를 유지한다. 수동으로 교체·복사해 생성 출처가 없는 장소는 댓글·대안과 함께 보존하며 이전 자동 동선으로 추정해 삭제하지 않는다.
+새 버전을 처음 가져오는 성공 시점에 캔버스 전체를 최신 계획으로 교체한다. 3일→2일 축소·2일→3일 확대·여행 날짜 전체 이동에도 새 계획의 날짜와 실제 PLACE·PLACE 간선만 남긴다. 기존 수동 장소·대안·댓글·사용자 날짜·연결·색·배치는 새 문서에 합치지 않는다. v4 날짜 연결은 새 날짜 순서의 기본 체인으로 다시 만든다. 같은 버전 재열기·재시도는 현재 편집·삭제를 유지하고 다시 초기화하지 않는다.
 
 여행 준비의 방장 일정 만들기는 현재 저장·준비 완료 상태를 확인하고 기존 생성 job을 시작하거나 진행 중인 job에 다시 연결한다. 실제 job 성공 후 `POST /api/v1/trips/{tripId}/plans/{planId}/canvas`로 공동 초안에 가져온다. 요청은 `{versionId, expectedCanvasRevision}`와 UUID `Idempotency-Key`다. 성공 응답은 기존 `CanvasState`이며 별도의 개인 태그 재검토나 정식 일정 저장 동의로 대체하지 않는다.
 
-현재 OWNER·ACTIVE·OPEN과 생성 source/inputToken·catalog·현재 plan/version을 같은 트랜잭션에서 검증한다. 원래 생성 plan은 바꾸지 않고 최신 추천의 PLACE와 날짜별 연결로 이전 생성 동선을 교체한다. START/END는 가짜 장소 카드로 만들지 않는다. 직접 배치한 장소, 댓글, 대안 카드와 남은 카드 사이 연결을 보존하며 revision 충돌은 409 `VERSION_CONFLICT`다. 최대 31일·500개 노드·500개 연결·JSON 1MiB를 넘으면 `CANVAS_CAPACITY_EXCEEDED`로 실패하고 부분 반영하지 않는다.
+현재 OWNER·ACTIVE·OPEN과 생성 source/inputToken·catalog·현재 plan/version을 같은 트랜잭션에서 검증한다. 새 문서 조립·장소 조회·유효성 검사와 revision CAS가 끝난 후 문서·sourcePlan·import marker·멱등 결과를 한 번에 저장한다. 실패·stale·권한 오류·CAS 충돌은 기존 문서와 marker를 유지한다. START/END는 가짜 장소 카드로 만들지 않는다. 최대 31일·500개 노드·500개 연결·JSON 1MiB는 새 문서에 적용하며 기존 댓글 수 때문에 작은 새 계획이 용량 오류가 나지 않는다.
+
+일반 PUT /canvas는 `{expectedRevision, expectedSourcePlan, document}`를 필수로 받는다. `expectedSourcePlan`은 정확한 `{planId, versionId}` 또는 `null`이며 현재 저장 source와 다르면 `409 VERSION_CONFLICT`다. 누락된 이전 FE 요청은 400이고, 새 빌드로 새로고침해야 한다. source를 포함한 전체 body가 fingerprint와 재시도 단위다. 현재 source가 아닌 managed 메타데이터를 복원하는 PUT도 허용하지 않는다. 같은 source의 정상 편집·삭제·undo는 유지한다. FE는 새 source를 확인하면 이전 대기 요청·충돌·실행 취소·댓글 버퍼를 합치지 않고 정리한다.
 
 카드 ID는 version/원래 node ID를 기반으로 한 UUID5다. `source:{planId,versionId,nodeId}`, `schedule:{startAt,endAt,locked}`는 서버의 원래 plan에서 가져온 값이다. 확인된 이동·체류로 계산한 시각을 우선하며, 새 일정에 대해서는 계획용 예상 시각도 표시한다. 조회한 경로의 검증 상태와 구분한다. 장소 상세의 estimatedStayMinutes는 DB에 저장된 권장 체류 분이며 미확인 시 null이다. PLACE 교체·복사본은 이 정보를 제거한다. 일반 편집은 메타데이터를 보존하며, undo가 복원하는 정보는 원래 plan의 장소·안정적 ID·시각과 일치하는지 서버가 다시 확인한다. 캔버스 편집이 기존 생성 plan의 검증 상태나 정식 저장 결과를 수정하지 않는다.
 

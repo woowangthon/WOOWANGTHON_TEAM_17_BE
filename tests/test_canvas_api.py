@@ -87,7 +87,7 @@ def test_save_cas_and_same_key_replay(setup_app):
     document = {"schemaVersion": 3, "days": [{"id": day, "date": None}], "nodes": [
         {"id": node, "kind": "place", "dayId": day, "position": {"x": 1, "y": 1}, "color": "default", "contentid": 101, "intent": "candidate"}], "edges": []}
     headers = {"Origin": "http://test", "Idempotency-Key": str(uuid.uuid4())}
-    body = {"expectedRevision": 0, "document": document}
+    body = {"expectedRevision": 0, "expectedSourcePlan": None, "document": document}
     response = client.put(f"/api/v1/trips/{TRIP}/canvas", json=body, headers=headers)
     assert response.status_code == 200, response.text
     assert response.json()["revision"] == 1
@@ -144,7 +144,7 @@ def test_v4_empty_day_links_persist_and_matching_revision_downgrade_is_rejected(
     document = {"schemaVersion": 4, "days": [{"id": day, "date": None, "position": {"x": -50, "y": 250}}],
                 "nodes": [], "edges": [], "dayLinks": []}
     headers = {"Origin": "http://test", "Idempotency-Key": str(uuid.uuid4())}
-    saved = client.put(f"/api/v1/trips/{TRIP}/canvas", json={"expectedRevision": 0, "document": document}, headers=headers)
+    saved = client.put(f"/api/v1/trips/{TRIP}/canvas", json={"expectedRevision": 0, "expectedSourcePlan": None, "document": document}, headers=headers)
     assert saved.status_code == 200, saved.text
     assert saved.json()["document"] == document
     with engine.connect() as conn:
@@ -152,11 +152,11 @@ def test_v4_empty_day_links_persist_and_matching_revision_downgrade_is_rejected(
         assert row["schema_version"] == 4
         assert json.loads(row["document_json"])["dayLinks"] == []
     legacy = {"schemaVersion": 3, "days": [{"id": day, "date": None}], "nodes": [], "edges": []}
-    rejected = client.put(f"/api/v1/trips/{TRIP}/canvas", json={"expectedRevision": 1, "document": legacy},
+    rejected = client.put(f"/api/v1/trips/{TRIP}/canvas", json={"expectedRevision": 1, "expectedSourcePlan": None, "document": legacy},
                           headers={"Origin": "http://test", "Idempotency-Key": str(uuid.uuid4())})
     assert rejected.status_code == 409
     assert rejected.json()["error"]["code"] == "SCHEMA_VERSION_CONFLICT"
-    stale = client.put(f"/api/v1/trips/{TRIP}/canvas", json={"expectedRevision": 0, "document": legacy},
+    stale = client.put(f"/api/v1/trips/{TRIP}/canvas", json={"expectedRevision": 0, "expectedSourcePlan": None, "document": legacy},
                        headers={"Origin": "http://test", "Idempotency-Key": str(uuid.uuid4())})
     assert stale.status_code == 409
     assert stale.json()["error"]["code"] == "VERSION_CONFLICT"

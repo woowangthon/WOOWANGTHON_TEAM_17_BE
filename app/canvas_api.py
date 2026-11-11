@@ -332,9 +332,18 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
         origin_check(request)
         if len(await request.body()) > canvas_models.MAX_DOCUMENT_BYTES + 1024:
             raise ApiError(400, "VALIDATION_ERROR", "캔버스 문서를 확인해 주세요.")
-        body = await body_json(request, {"expectedRevision", "document"})
-        if set(body) != {"expectedRevision", "document"} or isinstance(body.get("expectedRevision"), bool) or not isinstance(body.get("expectedRevision"), int) or not 0 <= body["expectedRevision"] <= 4_294_967_295:
+        body = await body_json(request, {"expectedRevision", "expectedSourcePlan", "document"})
+        if set(body) != {"expectedRevision", "expectedSourcePlan", "document"} or isinstance(body.get("expectedRevision"), bool) or not isinstance(body.get("expectedRevision"), int) or not 0 <= body["expectedRevision"] <= 4_294_967_295:
             raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.")
+        expected_source = body["expectedSourcePlan"]
+        try:
+            if expected_source is not None:
+                if not isinstance(expected_source, dict) or set(expected_source) != {"planId", "versionId"}:
+                    raise CanvasValidationError("invalid source fence")
+                expected_source = {"planId": canvas_models.canonical_uuid(expected_source["planId"]),
+                                   "versionId": canvas_models.canonical_uuid(expected_source["versionId"])}
+        except (CanvasValidationError, TypeError):
+            raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.") from None
         try:
             document = canvas_models.validate_document(body["document"])
         except CanvasValidationError:
@@ -359,20 +368,25 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
                         existing = store.load_document(conn, trip_id)
                         if (existing["revision"] if existing else 0) != body["expectedRevision"]:
                             raise CanvasError("VERSION_CONFLICT", 409)
+                        source = existing["sourcePlan"] if existing else None
+                        if source != expected_source:
+                            raise CanvasError("VERSION_CONFLICT", 409)
                         if existing and existing["document"].get("schemaVersion") == 4 and document["schemaVersion"] == 3:
                             raise CanvasError("SCHEMA_VERSION_CONFLICT", 409)
-                        source = existing["sourcePlan"] if existing else None
                         # A tab opened on a stacked legacy document may still submit
                         # that entire draft. Accept its current edits without restoring retired routes.
                         current_doc = canvas_import.current_route_document(document, source["versionId"]) if source else document
                         try:
-                            canvas_import.validate_managed_nodes(conn, trip_id, current_doc, existing["document"] if existing else None)
+                            canvas_import.validate_managed_nodes(conn, trip_id, current_doc,
+                                                                 existing["document"] if existing else None,
+                                                                 source_plan=source)
                         except canvas_import.CanvasImportError as exc:
                             raise CanvasError(exc.code, exc.status) from None
                         try:
                             ids = [n["contentid"] for n in current_doc["nodes"] if n["kind"] == "place"]
                             _place_details(conn, ids)
-                            saved = store.save_document(conn, trip_id, body["expectedRevision"], current_doc)
+                            saved = store.save_document(conn, trip_id, body["expectedRevision"], current_doc,
+                                                        source_plan=source)
                             result = public_state(conn, trip_id, saved)
                             store.complete_request(conn, session_id=session["id"], method="PUT", path=f"/api/v1/trips/{trip_id}/canvas",
                                                    key=key, lease_token=lease, result=result)
@@ -456,7 +470,7 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
                             if actual_revision != revision:
                                 raise CanvasError("VERSION_CONFLICT", 409)
                             base = current["document"] if current else _day_document(conn, trip_id)
-                            document = canvas_import.append_generated_plan(base, trip_id, plan_id, version_id, public_plan["document"])
+                            document = canvas_import.replace_generated_plan(base, trip_id, plan_id, version_id, public_plan["document"])
                             _place_details(conn, [node["contentid"] for node in document["nodes"] if node["kind"] == "place"])
                             saved = store.save_document(conn, trip_id, revision, document,
                                                         source_plan={"planId": plan_id, "versionId": version_id})

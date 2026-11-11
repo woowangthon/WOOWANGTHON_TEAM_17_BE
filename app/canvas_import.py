@@ -1,7 +1,6 @@
-"""Import the current generated route alongside the room's own cards and notes."""
+"""Replace the shared canvas with the current generated plan."""
 from __future__ import annotations
 
-import copy
 import json
 import uuid
 
@@ -38,41 +37,6 @@ def _route_position(index, y):
     return {"x": 100 + (1 - column if row % 2 else column) * 270, "y": y + row * 185}
 
 
-def _extend_default_day_links(document, trip_id, previous_days, new_day_ids):
-    """Extend only an intact generated-date chain; leave custom link layouts alone."""
-    if not new_day_ids or not previous_days or any(day["date"] is None for day in previous_days):
-        return
-    ordered_before = sorted(previous_days, key=lambda day: day["date"])
-    # A custom day (including one with a user-chosen date) makes the intent of
-    # its links ambiguous, so automatic extension is limited to generated days.
-    if any(day["id"] != str(uuid.uuid5(uuid.UUID(trip_id), "canvas-day:" + day["date"]))
-           for day in ordered_before):
-        return
-    links = document.get("dayLinks", [])
-    expected_before = {(left["id"], right["id"])
-                       for left, right in zip(ordered_before, ordered_before[1:])}
-    if not links or {(link["source"], link["target"]) for link in links} != expected_before:
-        return
-
-    ordered_after = sorted((day for day in document["days"] if day["date"]), key=lambda day: day["date"])
-    pairs = {(link["source"], link["target"]) for link in links}
-    ids = {link["id"] for link in links}
-    additions = []
-    for left, right in zip(ordered_after, ordered_after[1:]):
-        pair = (left["id"], right["id"])
-        if pair in pairs or not ({left["id"], right["id"]} & new_day_ids):
-            continue
-        link_id = str(uuid.uuid5(uuid.UUID(trip_id), f"canvas-day-link:{left['id']}:{right['id']}"))
-        # A collision with a retained user link is ambiguous; preserve the
-        # document and let its existing links remain the complete intent.
-        if link_id in ids:
-            return
-        additions.append({"id": link_id, "source": left["id"], "target": right["id"]})
-        ids.add(link_id)
-        pairs.add(pair)
-    document["dayLinks"].extend(additions)
-
-
 def current_route_document(document, version_id):
     """Legacy canvases may contain several imports of the same day's route."""
     obsolete = {
@@ -102,41 +66,29 @@ def current_route_document(document, version_id):
             "edges": [e for e in document["edges"] if e["source"] not in obsolete and e["target"] not in obsolete]}
 
 
-def append_generated_plan(document, trip_id, plan_id, version_id, plan):
-    """Replace the previous generated route; a version-level marker protects replays."""
-    result = copy.deepcopy(current_route_document(document, version_id))
-    original_count = len(result["nodes"])
-    keep_days = {n["dayId"] for n in result["nodes"]}
-    new_dates = {day["date"] for day in plan["days"]}
-    # Discard empty frames from a previous trip range, including the initial undated frame.
-    # User-created day IDs and frames containing any retained card survive regeneration.
-    result["days"] = [d for d in result["days"]
-                      if d["id"] in keep_days or d["date"] in new_dates
-                      or d["id"] != str(uuid.uuid5(uuid.UUID(trip_id), "canvas-day:" + (d["date"] or "empty")))]
-    if result.get("schemaVersion") == 4:
-        retained_day_ids = {day["id"] for day in result["days"]}
-        result["dayLinks"] = [link for link in result.get("dayLinks", [])
-                              if link["source"] in retained_day_ids and link["target"] in retained_day_ids]
-        previous_days = list(result["days"])
-    else:
-        previous_days = []
-    days_by_date = {day["date"]: day["id"] for day in result["days"] if day["date"]}
-    new_day_ids = set()
+def replace_generated_plan(document, trip_id, plan_id, version_id, plan):
+    """Build a clean canvas from one plan while retaining only the schema version."""
     try:
         canonical_uuid(plan_id)
         canonical_uuid(version_id)
-        for day in plan["days"]:
+        schema_version = document.get("schemaVersion", 3)
+        if schema_version not in (3, 4):
+            raise CanvasImportError("PLAN_INVALID")
+        result = {"schemaVersion": schema_version, "days": [], "nodes": [], "edges": []}
+        if schema_version == 4:
+            result["dayLinks"] = []
+        for day_index, day in enumerate(plan["days"]):
             day_date = day["date"]
-            day_id = days_by_date.get(day_date)
-            if day_id is None:
-                day_id = str(uuid.uuid5(uuid.UUID(trip_id), "canvas-day:" + day_date))
-                result["days"].append({"id": day_id, "date": day_date})
-                days_by_date[day_date] = day_id
-                new_day_ids.add(day_id)
-            y = max((node["position"]["y"] + 220 for node in result["nodes"] if node["dayId"] == day_id), default=100)
-            if y > 99000:
-                y = 100
+            day_id = str(uuid.uuid5(uuid.UUID(trip_id), "canvas-day:" + day_date))
+            result["days"].append({"id": day_id, "date": day_date})
+            if schema_version == 4 and day_index:
+                previous_id = result["days"][day_index - 1]["id"]
+                result["dayLinks"].append({
+                    "id": str(uuid.uuid5(uuid.UUID(trip_id), f"canvas-day-link:{previous_id}:{day_id}")),
+                    "source": previous_id, "target": day_id})
+            y = 100
             mapped = {}
+            place_index = 0
             for node in day["nodes"]:
                 if node["kind"] != "PLACE":
                     continue
@@ -144,19 +96,20 @@ def append_generated_plan(document, trip_id, plan_id, version_id, plan):
                 node_id = imported_node_id(version_id, original)
                 mapped[original] = node_id
                 result["nodes"].append({"id": node_id, "kind": "place", "dayId": day_id,
-                                        "position": _route_position(len(mapped) - 1, y),
-                                        "color": "default", "contentid": node["contentid"], "intent": "route",
-                                        **_metadata(plan_id, version_id, node)})
+                                         "position": _route_position(place_index, y),
+                                         "color": "default", "contentid": node["contentid"], "intent": "route",
+                                         **_metadata(plan_id, version_id, node)})
+                place_index += 1
             for edge in day["edges"]:
                 source, target = mapped.get(edge["fromNodeId"]), mapped.get(edge["toNodeId"])
                 if source and target:
                     result["edges"].append({"id": str(uuid.uuid5(uuid.UUID(version_id), "edge:" + canonical_uuid(edge["id"]))),
                                             "source": source, "target": target})
-        if len(result["nodes"]) == original_count:
+        if not result["nodes"]:
             raise CanvasImportError("PLAN_INVALID")
-        if result.get("schemaVersion") == 4:
-            _extend_default_day_links(result, trip_id, previous_days, new_day_ids)
         return validate_document(result)
+    except CanvasImportError:
+        raise
     except CanvasValidationError as exc:
         code = "CANVAS_CAPACITY_EXCEEDED" if "limit" in str(exc) or "large" in str(exc) else "PLAN_INVALID"
         raise CanvasImportError(code) from None
@@ -185,7 +138,7 @@ def mark_imported(conn, trip_id, plan_id, version_id, payload, revision):
                   "v": version_id, "p": plan_id, "t": trip_id})
 
 
-def validate_managed_nodes(conn, trip_id, document, existing):
+def validate_managed_nodes(conn, trip_id, document, existing, source_plan=None):
     """Keep facts immutable; legitimate undo may restore canonical plan metadata."""
     previous = {node["id"]: node for node in (existing or {}).get("nodes", [])}
     versions = {}
@@ -195,10 +148,13 @@ def validate_managed_nodes(conn, trip_id, document, existing):
             if "source" in old and node.get("contentid") == old.get("contentid"):
                 raise CanvasImportError("VALIDATION_ERROR", 400)
             continue
+        source = node["source"]
+        current_source = source_plan
+        if not current_source or (source["planId"], source["versionId"]) != (current_source["planId"], current_source["versionId"]):
+            raise CanvasImportError("VALIDATION_ERROR", 400)
         if (old.get("source") == node["source"] and old.get("schedule") == node["schedule"]
                 and old.get("contentid") == node["contentid"]):
             continue
-        source = node["source"]
         key = (source["planId"], source["versionId"])
         if key not in versions:
             payload = load_import_payload(conn, trip_id, *key)
