@@ -19,6 +19,7 @@ P2 = "00000000-0000-4000-8000-000000000104"
 START = "00000000-0000-4000-8000-000000000105"
 E1 = "00000000-0000-4000-8000-000000000106"
 E2 = "00000000-0000-4000-8000-000000000107"
+V2 = "00000000-0000-4000-8000-000000000109"
 DATE = "2026-11-11"
 
 
@@ -29,6 +30,28 @@ def generated_plan():
         {"id": P2, "kind": "PLACE", "contentid": 102, "estimatedStartAt": "2026-11-11T05:00:00.000Z", "estimatedEndAt": "2026-11-11T06:00:00.000Z", "locked": True}],
         "edges": [{"id": E1, "fromNodeId": START, "toNodeId": P1}, {"id": E2, "fromNodeId": P1, "toNodeId": P2}]}],
         "validation": {"status": "unknown"}}
+
+
+def multi_day_plan(dates, counts):
+    days = []
+    next_id = 0x200
+    for day_date, count in zip(dates, counts):
+        nodes = []
+        edges = []
+        for _ in range(count):
+            node_id = f"00000000-0000-4000-8000-{next_id:012x}"
+            next_id += 1
+            start_hour = 5 + len(nodes)
+            nodes.append({"id": node_id, "kind": "PLACE", "contentid": 101 + (next_id % 2),
+                          "estimatedStartAt": f"{day_date}T{start_hour:02d}:00:00.000Z",
+                          "estimatedEndAt": f"{day_date}T{start_hour + 1:02d}:00:00.000Z",
+                          "locked": len(nodes) % 2 == 0})
+            if len(nodes) > 1:
+                edges.append({"id": f"00000000-0000-4000-8000-{next_id:012x}",
+                              "fromNodeId": nodes[-2]["id"], "toNodeId": node_id})
+                next_id += 1
+        days.append({"date": day_date, "nodes": nodes, "edges": edges})
+    return {"days": days, "validation": {"status": "valid"}}
 
 
 def empty_document():
@@ -50,13 +73,15 @@ def import_app(setup_app):
         conn.execute(text("INSERT INTO places SELECT 102,'Second',contentTypeName,planningRole,adminCity,addr1,addr2,mapx,mapy,geoValidated,tel,homepageUrl,overviewText,firstimage FROM places WHERE contentid=101"))
     class FakeGenerationService:
         error = None
+        version = VERSION
+        plan = generated_plan()
         def current_plan_for_canvas(self, conn, request, trip_id, plan_id, version_id):
             assert conn.in_transaction()
             if self.error:
                 raise CanvasImportError(self.error)
-            if (trip_id, plan_id, version_id) != (TRIP, PLAN, VERSION):
+            if (trip_id, plan_id, version_id) != (TRIP, PLAN, self.version):
                 raise CanvasImportError("PLAN_NOT_FOUND", 404)
-            return {"public": {"planId": PLAN, "versionId": VERSION, "document": generated_plan()}}
+            return {"public": {"planId": PLAN, "versionId": self.version, "document": self.plan}}
     service = FakeGenerationService()
     client.app.state.generation_service = service
     return client, engine, service
@@ -97,6 +122,151 @@ def test_v4_import_preserves_day_positions_and_prunes_only_links_to_removed_date
     assert result["dayLinks"] == []
     empty_links = {**linked, "dayLinks": []}
     assert append_generated_plan(empty_links, TRIP, PLAN, VERSION, generated_plan())["dayLinks"] == []
+
+
+def test_v4_import_extends_only_a_complete_generated_date_chain():
+    dates = ["2026-11-11", "2026-11-12", "2026-11-13"]
+    days = [{"id": str(uuid.uuid5(uuid.UUID(TRIP), "canvas-day:" + date)), "date": date}
+            for date in dates]
+    old_link = {"id": "00000000-0000-4000-8000-000000000108",
+                "source": days[0]["id"], "target": days[1]["id"]}
+    old = {"schemaVersion": 4, "days": days[:2], "nodes": [], "edges": [], "dayLinks": [old_link]}
+    plan = multi_day_plan(dates, [1, 1, 1])
+    extended = append_generated_plan(old, TRIP, PLAN, VERSION, plan)
+    assert extended["dayLinks"][0] == old_link
+    assert extended["dayLinks"][1] == {
+        "id": str(uuid.uuid5(uuid.UUID(TRIP), f"canvas-day-link:{days[1]['id']}:{days[2]['id']}")),
+        "source": days[1]["id"], "target": days[2]["id"]}
+
+    no_links = {**old, "dayLinks": []}
+    assert append_generated_plan(no_links, TRIP, PLAN, VERSION, plan)["dayLinks"] == []
+
+    custom_link = {**old_link, "source": days[1]["id"], "target": days[0]["id"]}
+    custom = {**old, "dayLinks": [custom_link]}
+    assert append_generated_plan(custom, TRIP, PLAN, VERSION, plan)["dayLinks"] == [custom_link]
+
+    # A missing old pair is a deletion signal; importing a later day must not
+    # recreate it or infer links beyond the already preserved intent.
+    three_old_days = {"schemaVersion": 4, "days": days, "nodes": [], "edges": [],
+                      "dayLinks": [old_link]}
+    fourth_date = "2026-11-14"
+    fourth = {"id": str(uuid.uuid5(uuid.UUID(TRIP), "canvas-day:" + fourth_date)), "date": fourth_date}
+    deleted_pair = append_generated_plan(three_old_days, TRIP, PLAN, VERSION,
+                                         multi_day_plan(dates + [fourth_date], [1, 1, 1, 1]))
+    assert deleted_pair["dayLinks"] == [old_link]
+    assert fourth["id"] in {day["id"] for day in deleted_pair["days"]}
+
+
+def test_v3_two_to_three_day_regeneration_keeps_legacy_shape():
+    old = append_generated_plan(empty_document(), TRIP, PLAN, VERSION,
+                                multi_day_plan(["2026-11-11", "2026-11-12"], [1, 2]))
+    new_version = str(uuid.uuid4())
+    result = append_generated_plan(old, TRIP, PLAN, new_version,
+                                   multi_day_plan(["2026-11-11", "2026-11-12", "2026-11-13"], [1, 2, 5]))
+    assert result["schemaVersion"] == 3
+    assert "dayLinks" not in result
+    assert {day["date"] for day in result["days"]} == {"2026-11-11", "2026-11-12", "2026-11-13"}
+    route = [node for node in result["nodes"] if node.get("source")]
+    assert len(route) == 8
+    assert {node["source"]["versionId"] for node in route} == {new_version}
+
+
+def test_v4_three_day_regeneration_keeps_manual_edits_and_replaces_managed_route(import_app):
+    client, engine, service = import_app
+    dates = ["2026-11-11", "2026-11-12", "2026-11-13"]
+    day_ids = [str(uuid.uuid5(uuid.UUID(TRIP), "canvas-day:" + day_date)) for day_date in dates]
+    initial_link = {"id": "00000000-0000-4000-8000-000000000108",
+                    "source": day_ids[0], "target": day_ids[1]}
+    v4 = {"schemaVersion": 4,
+          "days": [{"id": day_ids[0], "date": dates[0], "position": {"x": 10, "y": 15}},
+                   {"id": day_ids[1], "date": dates[1], "position": {"x": 300, "y": 15}}],
+          "nodes": [], "edges": [], "dayLinks": [initial_link]}
+    saved = client.put(f"/api/v1/trips/{TRIP}/canvas", headers=headers(),
+                       json={"expectedRevision": 0, "document": v4})
+    assert saved.status_code == 200, saved.text
+
+    service.plan = multi_day_plan(dates[:2], [2, 1])
+    first = import_request(client, revision=1)
+    assert first.status_code == 200, first.text
+    old_document = first.json()["document"]
+    old_managed = [node for node in old_document["nodes"] if node.get("source")]
+    old_ids = {node["id"] for node in old_managed}
+    assert len(old_managed) == 3
+    assert len(old_document["edges"]) == 1
+
+    edited = copy.deepcopy(old_document)
+    old_route = next(node for node in edited["nodes"] if node.get("source"))
+    old_route["position"] = {"x": 777, "y": 888}
+    old_route["color"] = "rose"
+    manual = {"id": PLACE, "kind": "comment", "dayId": day_ids[0],
+              "position": {"x": 15, "y": 20}, "color": "sky", "text": "Keep this note"}
+    manual_route = {"id": str(uuid.uuid5(uuid.UUID(TRIP), "route:manual")), "kind": "place",
+                    "dayId": day_ids[0], "position": {"x": 200, "y": 20}, "color": "amber",
+                    "contentid": 102, "intent": "route"}
+    candidate = {"id": str(uuid.uuid5(uuid.UUID(TRIP), "candidate:manual")), "kind": "place",
+                 "dayId": day_ids[0], "position": {"x": 350, "y": 20}, "color": "lime",
+                 "contentid": 101, "intent": "candidate"}
+    manual_edge = {"id": str(uuid.uuid5(uuid.UUID(TRIP), "edge:manual-to-candidate")),
+                   "source": manual_route["id"], "target": candidate["id"]}
+    edited["nodes"].extend([manual, manual_route, candidate])
+    edited["edges"].append(manual_edge)
+    edit_response = client.put(f"/api/v1/trips/{TRIP}/canvas", headers=headers(),
+                               json={"expectedRevision": 2, "document": edited})
+    assert edit_response.status_code == 200, edit_response.text
+
+    service.version = V2
+    service.plan = multi_day_plan(dates, [1, 2, 5])
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO plan_versions VALUES(:v,:p,:t,:d)"),
+                     {"v": V2, "p": PLAN, "t": TRIP,
+                      "d": json.dumps({"schema": "generation.v1", "document": service.plan,
+                                       "sourceStamp": {"inputToken": "new"}})})
+    second = client.post(f"/api/v1/trips/{TRIP}/plans/{PLAN}/canvas", headers=headers(),
+                         json={"versionId": V2, "expectedCanvasRevision": 3})
+    assert second.status_code == 200, second.text
+    latest = second.json()["document"]
+    latest_route = [node for node in latest["nodes"] if node.get("intent") == "route" and node.get("source")]
+    assert len(latest_route) == 8
+    assert {node["dayId"] for node in latest_route} == set(day_ids)
+    assert all(node["source"]["versionId"] == V2 for node in latest_route)
+    assert not old_ids & {node["id"] for node in latest["nodes"]}
+    assert manual in latest["nodes"] and manual_route in latest["nodes"] and candidate in latest["nodes"]
+    assert not any(node["id"] == old_route["id"] for node in latest["nodes"])
+    assert len(latest["edges"]) == 6
+    assert manual_edge in latest["edges"]
+    assert all(edge["source"] not in old_ids and edge["target"] not in old_ids
+               for edge in latest["edges"] if edge != manual_edge)
+    expected_schedules = {
+        node["id"]: {"startAt": node["estimatedStartAt"], "endAt": node["estimatedEndAt"],
+                     "locked": node["locked"]}
+        for day in service.plan["days"] for node in day["nodes"]
+    }
+    assert all(node["schedule"] == expected_schedules[node["source"]["nodeId"]] for node in latest_route)
+    expected_links = [initial_link, {
+        "id": str(uuid.uuid5(uuid.UUID(TRIP), f"canvas-day-link:{day_ids[1]}:{day_ids[2]}")),
+        "source": day_ids[1], "target": day_ids[2]}]
+    assert latest["dayLinks"] == expected_links
+    assert [day["date"] for day in latest["days"]] == dates
+
+    forged = copy.deepcopy(latest)
+    forged_route = next(node for node in forged["nodes"] if node.get("source"))
+    forged_route["schedule"]["locked"] = not forged_route["schedule"]["locked"]
+    rejected = client.put(f"/api/v1/trips/{TRIP}/canvas", headers=headers(),
+                          json={"expectedRevision": 4, "document": forged})
+    assert rejected.status_code == 400
+    replay = client.post(f"/api/v1/trips/{TRIP}/plans/{PLAN}/canvas", headers=headers(),
+                         json={"versionId": V2, "expectedCanvasRevision": 4})
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["document"] == latest
+
+    deleted = {**latest, "nodes": [], "edges": []}
+    delete_response = client.put(f"/api/v1/trips/{TRIP}/canvas", headers=headers(),
+                                 json={"expectedRevision": 4, "document": deleted})
+    assert delete_response.status_code == 200, delete_response.text
+    replay_after_delete = client.post(f"/api/v1/trips/{TRIP}/plans/{PLAN}/canvas", headers=headers(),
+                                      json={"versionId": V2, "expectedCanvasRevision": 5})
+    assert replay_after_delete.status_code == 200, replay_after_delete.text
+    assert replay_after_delete.json()["document"]["nodes"] == []
 
 
 def test_import_cas_atomic_marker_and_repeat_after_deletion_preserve_latest(import_app):

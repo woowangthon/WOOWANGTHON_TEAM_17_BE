@@ -38,6 +38,41 @@ def _route_position(index, y):
     return {"x": 100 + (1 - column if row % 2 else column) * 270, "y": y + row * 185}
 
 
+def _extend_default_day_links(document, trip_id, previous_days, new_day_ids):
+    """Extend only an intact generated-date chain; leave custom link layouts alone."""
+    if not new_day_ids or not previous_days or any(day["date"] is None for day in previous_days):
+        return
+    ordered_before = sorted(previous_days, key=lambda day: day["date"])
+    # A custom day (including one with a user-chosen date) makes the intent of
+    # its links ambiguous, so automatic extension is limited to generated days.
+    if any(day["id"] != str(uuid.uuid5(uuid.UUID(trip_id), "canvas-day:" + day["date"]))
+           for day in ordered_before):
+        return
+    links = document.get("dayLinks", [])
+    expected_before = {(left["id"], right["id"])
+                       for left, right in zip(ordered_before, ordered_before[1:])}
+    if not links or {(link["source"], link["target"]) for link in links} != expected_before:
+        return
+
+    ordered_after = sorted((day for day in document["days"] if day["date"]), key=lambda day: day["date"])
+    pairs = {(link["source"], link["target"]) for link in links}
+    ids = {link["id"] for link in links}
+    additions = []
+    for left, right in zip(ordered_after, ordered_after[1:]):
+        pair = (left["id"], right["id"])
+        if pair in pairs or not ({left["id"], right["id"]} & new_day_ids):
+            continue
+        link_id = str(uuid.uuid5(uuid.UUID(trip_id), f"canvas-day-link:{left['id']}:{right['id']}"))
+        # A collision with a retained user link is ambiguous; preserve the
+        # document and let its existing links remain the complete intent.
+        if link_id in ids:
+            return
+        additions.append({"id": link_id, "source": left["id"], "target": right["id"]})
+        ids.add(link_id)
+        pairs.add(pair)
+    document["dayLinks"].extend(additions)
+
+
 def current_route_document(document, version_id):
     """Legacy canvases may contain several imports of the same day's route."""
     obsolete = {
@@ -82,7 +117,11 @@ def append_generated_plan(document, trip_id, plan_id, version_id, plan):
         retained_day_ids = {day["id"] for day in result["days"]}
         result["dayLinks"] = [link for link in result.get("dayLinks", [])
                               if link["source"] in retained_day_ids and link["target"] in retained_day_ids]
+        previous_days = list(result["days"])
+    else:
+        previous_days = []
     days_by_date = {day["date"]: day["id"] for day in result["days"] if day["date"]}
+    new_day_ids = set()
     try:
         canonical_uuid(plan_id)
         canonical_uuid(version_id)
@@ -93,6 +132,7 @@ def append_generated_plan(document, trip_id, plan_id, version_id, plan):
                 day_id = str(uuid.uuid5(uuid.UUID(trip_id), "canvas-day:" + day_date))
                 result["days"].append({"id": day_id, "date": day_date})
                 days_by_date[day_date] = day_id
+                new_day_ids.add(day_id)
             y = max((node["position"]["y"] + 220 for node in result["nodes"] if node["dayId"] == day_id), default=100)
             if y > 99000:
                 y = 100
@@ -114,6 +154,8 @@ def append_generated_plan(document, trip_id, plan_id, version_id, plan):
                                             "source": source, "target": target})
         if len(result["nodes"]) == original_count:
             raise CanvasImportError("PLAN_INVALID")
+        if result.get("schemaVersion") == 4:
+            _extend_default_day_links(result, trip_id, previous_days, new_day_ids)
         return validate_document(result)
     except CanvasValidationError as exc:
         code = "CANVAS_CAPACITY_EXCEEDED" if "limit" in str(exc) or "large" in str(exc) else "PLAN_INVALID"
