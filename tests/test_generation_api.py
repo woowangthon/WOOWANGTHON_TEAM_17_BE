@@ -42,7 +42,7 @@ def test_generation_readiness_is_publicly_safe_before_personal_reviews(client):
     data = response.json()
     assert data["conditionsVersion"] == 0
     assert data["settingsVersion"] == 0
-    assert data["settings"]["activityWindow"] == {"start": "09:00", "end": "18:00"}
+    assert data["settings"]["activityWindow"] == {"start": "09:00", "end": "20:00"}
     assert data["readyForGeneration"] is False
     assert {member["status"] for member in data["reviewMembers"]} == {"stale"}
     public = str(data)

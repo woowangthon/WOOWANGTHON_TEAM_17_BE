@@ -106,6 +106,31 @@ def test_kst_projection_ceil_minutes_and_unknown_prices_hours():
     assert result["validation"]["totalCostKrw"] is None
 
 
+def test_departure_time_and_confirmed_group_clock_anchor_reach_time_validation():
+    settings = {"activityWindow": {"start": "09:00", "end": "18:00"}, "departureAnchor": None,
+                "returnAnchor": None, "reviewedCommonFields": [],
+                "confirmedScheduleAnchors": [{"date": "2026-12-12", "contentid": 11, "position": 0,
+                                               "kind": "appointment", "startTime": "11:00",
+                                               "endTime": "12:00", "endDate": None}]}
+    result = run_validation(settings=settings, conditions={"transport": "walk", "expectedPeople": 1,
+                              "budget": 10000, "departureTime": "10:00"})
+    visit = result["days"][0]["nodes"][1]
+    assert visit["estimatedStartAt"] == "2026-12-12T02:00:00.000Z"
+    assert visit["estimatedEndAt"] == "2026-12-12T03:00:00.000Z"
+    assert visit["locked"] is True
+
+
+def test_lodging_checkin_time_is_not_treated_as_an_arrival_deadline():
+    settings = {"activityWindow": {"start": "09:00", "end": "18:00"}, "departureAnchor": None,
+                "returnAnchor": None, "reviewedCommonFields": [],
+                "confirmedScheduleAnchors": [{"date": "2026-12-12", "contentid": 11, "position": 0,
+                                               "kind": "lodging", "startTime": "10:00",
+                                               "endTime": None, "endDate": "2026-12-13"}]}
+    result = run_validation(settings=settings, conditions={"transport": "walk", "expectedPeople": 1,
+                              "budget": 10000, "departureTime": "11:00"})
+    assert "FIXED_START_MISSED" not in {item["code"] for item in result["validation"]["violations"]}
+
+
 @pytest.mark.parametrize("seconds, expected", [(1200, "verified"), (1201, "violated")])
 def test_walking_limit_is_per_leg_and_not_rounded_down(seconds, expected):
     result = run_validation(router=Router(seconds=seconds))
@@ -117,6 +142,15 @@ def test_missing_origin_does_not_create_an_arrival_chain():
                                       "departureAnchor": None, "returnAnchor": None, "reviewedCommonFields": []})
     assert result["days"][0]["nodes"][1]["estimatedStartAt"] is None
     assert result["validation"]["route"]["status"] == "unknown"
+
+
+def test_meal_without_catalog_stay_duration_stays_unknown_not_zero():
+    catalog = Catalog()
+    catalog.places = [{"contentid": 11, "planningRole": "meal_stop"}]
+    catalog.details = [{"contentid": 11, "estimatedStayMinutes": None}]
+    result = run_validation(catalog=catalog)
+    assert result["days"][0]["nodes"][1]["stayMinutes"] is None
+    assert "MEAL_DURATION_UNKNOWN" in result["validation"]["warnings"]
 
 
 def test_deadline_window_closure_and_known_budget_violation_are_hard_failures():

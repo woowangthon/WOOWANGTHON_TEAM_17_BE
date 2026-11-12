@@ -8,6 +8,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from . import place_catalog
 from .routing import KakaoRouter, _coord, unknown_route
 
 KST = timezone(timedelta(hours=9), "Asia/Seoul")
@@ -27,6 +28,11 @@ def _clock(day, value):
 def _domain(reasons, violated=False):
     return {"status": "violated" if violated else "unknown" if reasons else "verified",
             "reasonCodes": sorted(set(reasons))}
+
+
+def is_late_booking(anchor, closing):
+    return any(anchor.get(field) and _clock(closing.date().isoformat(), anchor[field]) >= closing
+               for field in ("startTime", "endTime"))
 
 
 def _price(detail, people):
@@ -110,7 +116,7 @@ def _route_facts(router, origin, destination, mode):
         return unknown_route(mode, "ROUTE_RESPONSE_INVALID")
 
 
-def validate_generated_plan(draft, catalog, conditions, preferences, settings, router=None, timeout_seconds=90):
+def validate_generated_plan(draft, catalog, conditions, preferences, settings, router=None, timeout_seconds=90, *, planned_slots=None):
     """Validate a detached candidate draft; unresolved facts stay null, not invented."""
     if hasattr(draft, "as_dict"):
         draft = draft.as_dict()
@@ -131,6 +137,15 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
             anchors[(anchor["date"], anchor["position"], anchor["contentid"])] = anchor
             if reviewed["field"] == "lodging":
                 overnight.add((anchor["date"], anchor["contentid"]))
+    for anchor in settings.get("confirmedScheduleAnchors", []):
+        if not isinstance(anchor, dict):
+            continue
+        key = (anchor.get("date"), anchor.get("position"), anchor.get("contentid"))
+        if all(value is not None for value in key):
+            anchors[key] = anchor
+        if (anchor.get("kind") == "lodging" and anchor.get("endDate")
+                and anchor.get("date") != anchor.get("endDate")):
+            overnight.add((anchor["date"], anchor["contentid"]))
     deadline = time.monotonic() + min(90, max(0.01, timeout_seconds))
     counts = 0
     reasons = {key: [] for key in ("route", "walking", "time", "budget", "openingHours")}
@@ -149,13 +164,18 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
 
     for day_index, source_day in enumerate(draft["days"]):
         day = source_day["date"]
-        opened, closing = _clock(day, window["start"]), _clock(day, window["end"])
+        first_start = conditions.get("departureTime") if day_index == 0 else None
+        opened, closing = _clock(day, first_start or window["start"]), _clock(day, window["end"])
         if closing <= opened:
             raise ValueError("INVALID_ACTIVITY_WINDOW")
         cursor_time = opened
         nodes, edges = [], []
         if day_index == 0:
             start = settings.get("departureAnchor")
+            if conditions.get("departureContentid") is not None:
+                departure_place = next((p for p in catalog.places if p.get("contentid") == conditions["departureContentid"]), None)
+                if departure_place:
+                    start = {"label": departure_place.get("title"), "coordinate": place_catalog._coord(departure_place)}
             sid = str(uuid.uuid4())
             previous = {"id": sid, "nodeKey": sid, "kind": "START", "contentid": None,
                         "title": (start or {}).get("label") or conditions.get("departure") or "출발 위치 미확인",
@@ -192,7 +212,8 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
                     "title": presentation["title"], "coordinate": coordinate,
                     "estimatedStartAt": None, "estimatedEndAt": None, "estimatedCostKrw": None,
                     "feeLabel": presentation.get("feeLabel", "요금 확인 필요"), "stayMinutes": None,
-                    "locked": ending or (day, position, cid) in anchors}
+                    "locked": ending or (day, position, cid) in anchors and anchors[(day, position, cid)].get("kind") != "lodging" and any(
+                        anchors[(day, position, cid)].get(field) for field in ("startTime", "arrivalDeadline", "endTime"))}
             if presentation.get("openingHoursText"):
                 node["openingHoursText"] = presentation["openingHoursText"]
             route = unknown_route(mode, "ROUTE_COORDINATE_INVALID")
@@ -239,10 +260,14 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
                     target = _clock(day, anchor[field])
                     if arrival is None:
                         reasons["time"].append("FIXED_TIME_UNVERIFIED")
-                    elif arrival > target:
+                    elif arrival > target and not (field == "startTime" and anchor.get("kind") == "lodging"):
                         fail("time", code, day, cid)
-            if cursor_time is not None and anchor.get("startTime"):
-                cursor_time = max(cursor_time, _clock(day, anchor["startTime"]))
+            if anchor.get("startTime"):
+                target = _clock(day, anchor["startTime"])
+                cursor_time = max(cursor_time, target) if cursor_time is not None else (None if anchor.get("kind") == "lodging" else target)
+            slot = (planned_slots or {}).get(day, {}).get(cid)
+            if slot and cursor_time is not None:
+                cursor_time = max(cursor_time, slot[0])
             visit_start = cursor_time
             node["estimatedStartAt"] = _iso(cursor_time)
             detail_rows = details.get(cid, [])
@@ -256,11 +281,13 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
             overnight_stay = (not ending and day_index < len(draft["days"]) - 1
                               and position == len(source_places) - 1 and (day, cid) in overnight
                               and roles.get(cid) in {"overnight_lodging", "overnight_camping"})
-            if overnight_stay and cursor_time is not None and not anchor.get("endTime"):
+            if overnight_stay and cursor_time is not None:
                 if cursor_time > closing:
                     fail("time", "ACTIVITY_WINDOW_EXCEEDED", day, cid)
                 next_day = draft["days"][day_index + 1]["date"]
                 target = _clock(next_day, window["start"])
+                if anchor.get("checkoutTime"):
+                    target = min(target, _clock(next_day, anchor["checkoutTime"]))
                 node["stayMinutes"] = max(0, math.ceil((target - cursor_time).total_seconds() / 60))
                 cursor_time = max(cursor_time, target)
             elif cursor_time is not None and anchor.get("endTime"):
@@ -273,9 +300,14 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
                 cursor_time += timedelta(minutes=duration)
             else:
                 cursor_time = None
-                reasons["time"].append("STAY_DURATION_UNKNOWN")
+                if duration is None:
+                    reasons["time"].append("MEAL_DURATION_UNKNOWN" if roles.get(cid) == "meal_stop" else "STAY_DURATION_UNKNOWN")
             node["estimatedEndAt"] = _iso(cursor_time)
-            if cursor_time is not None and cursor_time > closing and not overnight_stay:
+            late_booking = planned_slots is not None and is_late_booking(anchor, closing)
+            if ending and planned_slots is not None and previous:
+                late_booking = any(a.get("date") == day and a.get("contentid") == previous.get("contentid")
+                                   and is_late_booking(a, closing) for a in anchors.values())
+            if cursor_time is not None and cursor_time > closing and not overnight_stay and not late_booking:
                 fail("time", "ACTIVITY_WINDOW_EXCEEDED", day, cid)
             if not ending:
                 price = _price(detail, people)
@@ -284,7 +316,7 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
                 else:
                     known_cost += price
                     node["estimatedCostKrw"] = price if price <= 2**32 - 1 else None
-                opening = _opening(detail, visit_start, cursor_time)
+                opening = _opening(detail, visit_start, visit_start if overnight_stay else cursor_time)
                 if opening == "violated":
                     fail("openingHours", "PLACE_CLOSED_AT_VISIT", day, cid)
                 elif opening == "unknown":

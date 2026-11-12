@@ -119,7 +119,7 @@ class CandidateSelection:
         return json.loads(self._document)
 
     def draft_candidates(self) -> list[dict[str, Any]]:
-        allowed = {"contentid", "title", "planningRole", "adminCity", "allowedDates", "groupScore", "coordinate"}
+        allowed = {"contentid", "title", "planningRole", "adminCity", "allowedDates", "groupScore", "coordinate", "estimatedStayMinutes"}
         return [{k: v for k, v in row.items() if k in allowed}
                 for row in json.loads(self._document)["eligible"]]
 
@@ -263,7 +263,8 @@ def _role(r: Mapping[str, Any]) -> bool:
 
 
 def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog: Any,
-                              review: dict[str, Any] | None = None, policy: dict[str, Any] | None = None) -> CandidateSelection:
+                              review: dict[str, Any] | None = None, policy: dict[str, Any] | None = None,
+                              *, confirmed_evidence: dict[str, Any] | None = None) -> CandidateSelection:
     """Build a deterministic selection; only explicit reviewed evidence can pass required filters."""
     try:
         doc = snapshot.as_dict()
@@ -273,9 +274,14 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
         days = _date_range(conditions.get("startDate"), conditions.get("endDate"))
         day_strings = [d.isoformat() for d in days]
         supported = set(build_supported_tags(catalog))
-        ndigest = normalization_digest(normalization_result)
-        reviewed = _review(review, snapshot, ndigest, catalog.digest)
-        terms, _ = _normalization(normalization_result, prefs, supported)
+        if confirmed_evidence is None:
+            ndigest = normalization_digest(normalization_result)
+            reviewed = _review(review, snapshot, ndigest, catalog.digest)
+            terms, _ = _normalization(normalization_result, prefs, supported)
+        else:
+            ndigest = confirmed_evidence["digest"]
+            reviewed = None
+            terms = []
         policy = policy or {"version": "candidate-v1", "maxCandidates": 200, "reviewedRegionCities": []}
         if not isinstance(policy, dict) or set(policy) != {"version", "maxCandidates", "reviewedRegionCities"} or policy.get("version") != "candidate-v1" or isinstance(policy.get("maxCandidates"), bool) or not isinstance(policy.get("maxCandidates"), int) or not 1 <= policy["maxCandidates"] <= 200 or not isinstance(policy.get("reviewedRegionCities"), list) or any(c not in KNOWN_CITIES for c in policy["reviewedRegionCities"]) or len(set(policy["reviewedRegionCities"])) != len(policy["reviewedRegionCities"]):
             raise CandidateSelectionError("INVALID_POLICY")
@@ -317,13 +323,13 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
             if any(isinstance(i, bool) or not isinstance(i, int) or i not in accepted or i >= len(terms) or terms[i]["memberRef"] != rf["memberRef"] or terms[i]["field"] != rf["field"] for i in inds):
                 raise CandidateSelectionError("INVALID_REVIEW")
             reviewed_map[(rf["memberRef"], rf["field"])] = inds
-        for p in prefs:
+        for p in prefs if confirmed_evidence is None else []:
             for fld in ("likes", "avoid", "food"):
                 text = p.get(fld)
                 if text and text.strip() and not reviewed_map.get((p["memberRef"], fld)):
                     if (p["memberRef"], fld, text) in required_fields:
                         unresolved.append("REQUIRED_TERM_REVIEW_REQUIRED")
-        predicates = []
+        predicates = [] if confirmed_evidence is None else [dict(x) for x in confirmed_evidence.get("predicates", [])]
         for i in accepted:
             t = terms[i]
             rf = next((x for x in reviewed_fields if x["memberRef"] == t["memberRef"] and x["field"] == t["field"] and i in x["termIndexes"]), None)
@@ -335,7 +341,7 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
         # predicate, so model duplication cannot amplify one member's weight.
         predicates = list({(p["memberRef"], p["tag"], p["polarity"], p["scope"], p["required"]): p for p in predicates}.values())
         # Every required source field needs a reviewed accepted predicate.
-        for ref, fld, _ in required_fields:
+        for ref, fld, _ in required_fields if confirmed_evidence is None else []:
             if not reviewed_map.get((ref, fld)):
                 if "REQUIRED_TERM_REVIEW_REQUIRED" not in unresolved: unresolved.append("REQUIRED_TERM_REVIEW_REQUIRED")
         # Validate explicit missing-tag facts and common anchors.
@@ -347,7 +353,8 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
             if absence in absences:
                 raise CandidateSelectionError("INVALID_REVIEW")
             absences.add(absence)
-        rcommon = [] if reviewed is None else reviewed["reviewedCommonFields"]
+        rcommon = (confirmed_evidence.get("reviewedCommonFields", []) if confirmed_evidence is not None
+                   else [] if reviewed is None else reviewed["reviewedCommonFields"])
         common_keys = set()
         fixed_visits = []
         for rf in rcommon:
@@ -364,6 +371,8 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
             match = next((x for x in rcommon if x["field"] == fld), None)
             if not match or not match["fixedVisits"]:
                 unresolved.append("COMMON_ANCHOR_REVIEW_REQUIRED")
+        if confirmed_evidence is not None:
+            fixed_visits.extend(confirmed_evidence.get("fixedVisits", []))
         if any(not isinstance(v, dict) or set(v) != {"date", "contentid", "position"} or v["date"] not in day_strings or isinstance(v["contentid"], bool) or not isinstance(v["contentid"], int) or not -(2**31) <= v["contentid"] <= 2**31-1 or isinstance(v["position"], bool) or not isinstance(v["position"], int) or not 0 <= v["position"] < 8 for v in fixed_visits):
             raise CandidateSelectionError("INVALID_REVIEW")
         if len({(v["date"],v["position"]) for v in fixed_visits}) != len(fixed_visits):
@@ -481,6 +490,9 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                     "coordinate": coord, "allowedDates": allowed, "groupScore": mean,
                     "minimumMemberScore": minimum, "memberScores": member_scores,
                     "matchedTags": sorted(tags), "unknownTerms": unknown_terms}
+            stay = (detail or {}).get("estimatedStayMinutes")
+            if type(stay) is int and 1 <= stay <= 1440:
+                item["estimatedStayMinutes"] = stay
             item["feeLabel"] = "요금 확인 필요"
             for key, source in (("feeLabel", detail), ("openingHoursText", detail)):
                 if source and isinstance(source.get("feeText" if key == "feeLabel" else key), str) and source.get("feeText" if key == "feeLabel" else key).strip():
@@ -492,6 +504,9 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
         eligible_by_id = {x["contentid"]: x for x in pool}
         if any(v["contentid"] not in eligible_by_id or v["date"] not in eligible_by_id[v["contentid"]]["allowedDates"] for v in fixed_visits):
             unresolved.append("FIXED_VISIT_NOT_ELIGIBLE")
+        if confirmed_evidence is not None:
+            unresolved.extend(x["code"] for x in confirmed_evidence.get("issues", [])
+                              if x.get("code") in {"REQUIRED_PREFERENCE_UNSUPPORTED", "REQUIRED_PREFERENCE_UNSATISFIED"})
         maxc = policy["maxCandidates"]
         anchor_ids = {v["contentid"] for v in fixed_visits}
         if len(anchor_ids) > maxc:
@@ -506,6 +521,26 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                         del selected[worst["contentid"]]
                 if len(selected) < maxc:
                     selected[cid] = eligible_by_id[cid]
+        # Keep meal candidates available to the planner even when their group
+        # score ranks behind a large sightseeing pool. The public pool remains
+        # bounded and all hard filters above still apply.
+        # Lunch, dinner and one alternative in case a proposed restaurant is closed.
+        meal_target = min(3 * len(day_strings), max(0, maxc - len(anchor_ids)))
+        meal_rows = [x for x in pool if x["planningRole"] == "meal_stop"]
+        selected_meals = [x for x in selected.values() if x["planningRole"] == "meal_stop"]
+        for meal in meal_rows:
+            if len(selected_meals) >= meal_target:
+                break
+            if meal["contentid"] in selected:
+                continue
+            replaceable = [x for x in selected.values()
+                           if x["contentid"] not in anchor_ids and x["planningRole"] != "meal_stop"]
+            if not replaceable:
+                break
+            worst = min(replaceable, key=lambda x: (x["minimumMemberScore"], x["groupScore"], -x["contentid"]))
+            del selected[worst["contentid"]]
+            selected[meal["contentid"]] = meal
+            selected_meals.append(meal)
         candidate_public = sorted(selected.values(), key=lambda x: (-x["minimumMemberScore"], -x["groupScore"], x["contentid"]))
         result = {"sourceFingerprint": snapshot.fingerprint, "catalogDigest": catalog.digest,
                   "normalizationDigest": ndigest, "policyDigest": pdigest, "eligible": candidate_public,
@@ -519,3 +554,43 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
         raise
     except Exception:
         raise CandidateSelectionError() from None
+
+
+def build_confirmed_candidate_selection(snapshot: Any, catalog: Any, evidence: dict[str, Any],
+                                       common_settings: dict[str, Any] | None = None,
+                                       policy: dict[str, Any] | None = None) -> CandidateSelection:
+    """Select using deterministic confirmed-v1 predicates without review DTOs."""
+    from .confirmed_preferences import group_schedule_anchors
+    settings = common_settings or {"reviewedCommonFields": []}
+    snapshot_doc = snapshot.as_dict()
+    prefs = snapshot_doc["confirmedPreferences"]
+    common = []
+    conditions = snapshot.as_dict()["conditions"]
+    for field in ("lodging", "fixedSchedule"):
+        source = conditions.get(field)
+        if not source:
+            continue
+        matched = next((x for x in settings.get("reviewedCommonFields", [])
+                       if isinstance(x, dict) and x.get("field") == field and x.get("reviewed") is True), None)
+        if matched and isinstance(matched.get("anchors"), list):
+            common.append({"field": field, "text": source,
+                           "fixedVisits": [{k: a[k] for k in ("date", "contentid", "position")}
+                                           for a in matched["anchors"] if isinstance(a, dict)
+                                           and all(k in a for k in ("date", "contentid", "position"))]})
+    evidence = {**evidence, "issues": list(evidence.get("issues", []))}
+    try:
+        anchors = group_schedule_anchors(prefs, settings, snapshot_doc.get("_identity"))
+    except ValueError:
+        anchors = []
+        evidence["issues"].append({"field": "scheduleItems", "code": "REQUIRED_PREFERENCE_UNSATISFIED"})
+    derived_anchors = [a for a in anchors if a.get("kind") in {"lodging", "appointment"}]
+    fixed = [{k: a[k] for k in ("date", "contentid", "position")} for a in derived_anchors
+             if all(k in a for k in ("date", "contentid", "position"))]
+    invalid_group = [item for pref in prefs for item in pref.get("scheduleItems", [])
+                     if item.get("scope") == "group" and (item.get("contentid") is None or item.get("date") is None)]
+    if invalid_group or len(fixed) != len(derived_anchors):
+        evidence["issues"].append({"field": "scheduleItems", "code": "REQUIRED_PREFERENCE_UNSATISFIED"})
+    evidence["digest"] = _digest({k: evidence[k] for k in ("policyVersion", "predicates", "issues")})
+    return build_candidate_selection(snapshot, None, catalog, None, policy,
+                                     confirmed_evidence={**evidence, "fixedVisits": fixed,
+                                                         "reviewedCommonFields": common})

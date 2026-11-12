@@ -10,12 +10,12 @@ CONDITIONS = {
     "region": "충북 단양", "startDate": "2026-12-12", "endDate": "2026-12-13",
     "expectedPeople": 1, "budget": 600000, "transport": "charter",
     "departure": "청주역", "returnRoute": "청주역", "lodging": "조용한 숙소",
-    "fixedSchedule": "둘째 날 저녁 복귀",
+    "fixedSchedule": "둘째 날 저녁 복귀", "departureTime": "09:00", "departureContentid": None,
 }
 DRAFT = {
     "originalText": "테스트용 개인 원문. 자연과 조용한 카페를 좋아합니다.",
     "likes": "자연과 카페", "avoid": "장거리 도보", "avoidImportance": "required",
-    "food": "맵지 않은 음식", "foodImportance": "preferred", "walking": "20",
+    "food": "맵지 않은 음식", "foodImportance": "preferred", "walking": "20", "scheduleItems": [],
 }
 SUGGESTION = {"suggestions": {key: value for key, value in DRAFT.items() if key != "originalText"},
               "needsWalkingAnswer": False}

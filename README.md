@@ -2,6 +2,8 @@
 
 충북 단체여행 서비스 FastAPI/MySQL 백엔드입니다. 기기 세션과 여행방 시작, 공유 여행 준비·개인 조건, 일정 후보 선별·AI 초안·실제 경로 검증·명시적 저장을 제공합니다. 인원과 여행 조건은 방 생성 이후 설정하며 시작 API에서 임의 확정하지 않습니다.
 
+공동 캔버스 초안은 장소 카드·댓글·배치·색·연결을 revision 기반으로 저장하고, 장소 상세 조회와 Gemini의 단일 장소 후보 추천을 제공합니다. 테이블 설치에는 `migrations/004_canvas.up.sql`, v4 저장에는 `migrations/005_canvas_v4.up.sql`을 각각 명시적으로 적용해야 합니다. 앱 시작이나 PyCharm의 `run.py` 실행은 migration을 적용하지 않습니다. 상세 규격과 실행 범위는 [공동 캔버스](docs/canvas-studio.md)를 참고하세요.
+
 Python 3.12 이상과 MySQL 8.0.16 이상이 필요합니다. 설치와 실행:
 
 ```powershell

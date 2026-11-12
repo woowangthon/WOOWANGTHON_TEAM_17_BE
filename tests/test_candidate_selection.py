@@ -161,6 +161,26 @@ def test_mysql_decimal_coordinates_do_not_enter_strict_input_json_validator():
     assert eligible[0]["coordinate"] == {"latitude": 36.6286, "longitude": 127.4341, "crs": "WGS84"}
 
 
+def test_draft_candidate_forwards_only_valid_catalog_stay_estimate():
+    snap = source(avoid=None)
+    norm = normalized(field=None)
+    cat = Catalog([place(1, role="meal_stop", use="MEAL")],
+                  details=[{"contentid": 1, "estimatedStayMinutes": 75}])
+    candidate = build(snap, norm, cat).draft_candidates()[0]
+    assert candidate["planningRole"] == "meal_stop"
+    assert candidate["estimatedStayMinutes"] == 75
+
+
+def test_bounded_candidate_pool_reserves_a_meal_stop_after_hard_filtering():
+    snap = source(avoid=None)
+    norm = normalized(field=None)
+    cat = Catalog([place(10), place(11, role="meal_stop", use="MEAL")],
+                  details=[{"contentid": 11, "estimatedStayMinutes": 60}])
+    selected = build(snap, norm, cat, policy={"version": "candidate-v1", "maxCandidates": 1,
+                                                 "reviewedRegionCities": []}).draft_candidates()
+    assert len(selected) == 1 and selected[0]["planningRole"] == "meal_stop"
+
+
 def test_substring_tag_does_not_satisfy_a_required_predicate():
     snap, norm = source(), normalized(term_tag="자연", evidence="놀이")
     cat = Catalog([place(1), place(2, city="충주시")], preferences=[

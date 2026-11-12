@@ -143,7 +143,7 @@ def cursor_decode(key: str, token: str, session_id: str) -> tuple[datetime, str]
 
 
 def create_app(settings: Settings, preparation_interpreter=None, *, generation_normalizer=None,
-               generation_drafter=None, generation_router=None) -> FastAPI:
+               generation_drafter=None, generation_router=None, canvas_recommender=None) -> FastAPI:
     engine: Engine = create_engine(
         settings.database_url or "mysql+pymysql://invalid:invalid@127.0.0.1/invalid",
         pool_pre_ping=True,
@@ -425,6 +425,13 @@ def create_app(settings: Settings, preparation_interpreter=None, *, generation_n
         set_session_cookie=set_session_cookie, normalizer=generation_normalizer,
         drafter=generation_drafter,
         router=generation_router if generation_router is not None else KakaoRouter(settings.kakao_rest_api_key),
+    )
+
+    from .canvas_api import register_canvas_routes
+    register_canvas_routes(
+        app, engine, find_session=find_session, cookie_name=cookie_name,
+        origin_check=origin_check, body_json=body_json, ApiError=ApiError,
+        set_session_cookie=set_session_cookie, recommender=canvas_recommender,
     )
 
     @app.post("/api/v1/device-session")

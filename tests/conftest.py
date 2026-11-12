@@ -28,7 +28,7 @@ def no_live_https_providers(monkeypatch):
     """Every provider test must explicitly replace HTTPS; never spend real keys."""
     def blocked(*args, **kwargs):
         raise AssertionError("Live provider calls are forbidden in automated tests")
-    for name in ("app.routing", "chungbuk_trip_ai.gemini", "chungbuk_trip_ai.normalization", "chungbuk_trip_ai.scheduling"):
+    for name in ("app.routing", "app.canvas_recommendation", "chungbuk_trip_ai.gemini", "chungbuk_trip_ai.normalization", "chungbuk_trip_ai.scheduling"):
         try:
             module = importlib.import_module(name)
         except ImportError:

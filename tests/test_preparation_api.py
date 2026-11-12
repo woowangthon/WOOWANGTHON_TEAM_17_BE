@@ -17,7 +17,7 @@ def test_defaults_get_is_read_only_and_error_envelope(client, db_engine):
     assert prep.status_code == 200, prep.text
     data = prep.json()
     assert data["conditionsVersion"] == 0
-    assert data["conditions"] == {key: None for key in CONDITIONS}
+    assert data["conditions"] == {**{key: None for key in CONDITIONS}, "departureTime": "09:00"}
     assert data["activeMemberCount"] == 1
     assert data["canEditConditions"] is True
     assert data["members"] == [{"id": room["member"]["id"], "nickname": "방장", "role": "OWNER", "preparationStatus": "writing"}]
@@ -26,7 +26,8 @@ def test_defaults_get_is_read_only_and_error_envelope(client, db_engine):
     personal = client.get(base(room) + "/preferences/me").json()
     assert personal["preferenceVersion"] == 0
     assert personal["draft"] == {"originalText": None, "likes": None, "avoid": None,
-        "avoidImportance": "required", "food": None, "foodImportance": "preferred", "walking": None}
+        "avoidImportance": "required", "food": None, "foodImportance": "preferred", "walking": None, "scheduleItems": []}
+    assert personal["clarifications"] == []
     assert personal["confirmation"] == {"status": "writing", "confirmedConditionsVersion": None,
         "confirmedPreferenceVersion": None, "confirmedAt": None}
     assert prep.headers["cache-control"] == "no-store"
@@ -189,7 +190,7 @@ def test_restart_restores_conditions_private_draft_and_confirmation(client, app)
         assert restarted.get(base(room) + "/preparation").json()["readiness"]["conditionsReady"] is True
 
 
-def test_new_participant_recalculates_preparation_readiness(client, app):
+def test_new_participant_does_not_block_owner_preparation_readiness(client, app):
     room = create_room(client)
     assert save_conditions(client, room).status_code == 200
     assert save_personal(client, room, cv=1).status_code == 200
@@ -197,9 +198,26 @@ def test_new_participant_recalculates_preparation_readiness(client, app):
     assert client.get(base(room) + "/preparation").json()["readiness"]["conditionsReady"] is True
     with member_client(app, room):
         prep = client.get(base(room) + "/preparation").json()
-        assert prep["readiness"]["conditionsReady"] is False
+        assert prep["readiness"]["conditionsReady"] is True
         assert prep["activeMemberCount"] == 2
-        assert {r["code"] for r in prep["readiness"]["reasons"]} == {"MEMBER_COUNT_MISMATCH", "PREFERENCES_UNCONFIRMED"}
+        assert prep["readiness"]["reasons"] == []
+
+
+def test_normalized_condition_and_preference_noops_preserve_versions_and_confirmation(client):
+    room = create_room(client)
+    assert save_conditions(client, room).status_code == 200
+    assert save_personal(client, room, cv=1).status_code == 200
+    assert confirm(client, room, cv=1).status_code == 200
+
+    same_conditions = save_conditions(client, room, version=1)
+    assert same_conditions.status_code == 200, same_conditions.text
+    assert same_conditions.json()["conditionsVersion"] == 1
+    assert same_conditions.json()["requiresReconfirmation"] is False
+
+    same_draft = save_personal(client, room, cv=1, pv=1)
+    assert same_draft.status_code == 200, same_draft.text
+    assert same_draft.json()["preferenceVersion"] == 1
+    assert same_draft.json()["confirmation"]["status"] == "confirmed"
 
 
 @pytest.mark.parametrize("method,suffix,payload", [

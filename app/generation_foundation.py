@@ -59,16 +59,14 @@ def _confirmed_doc(row: Any, conditions_version: int) -> bool:
 
 
 def _clean_preference(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, dict) or set(raw) != set(preparation.PERSONAL_KEYS):
+    if not isinstance(raw, dict) or set(raw) not in (set(preparation.PERSONAL_KEYS), set(preparation.PERSONAL_KEYS) | {"scheduleItems"}):
         raise GenerationFoundationError("INVALID_PREPARATION_DOCUMENT")
     try:
-        clean = preparation.validate_draft(raw)
+        clean = preparation.validate_draft({**raw, "scheduleItems": raw.get("scheduleItems", [])})
     except preparation.PrepFailure:
         raise GenerationFoundationError("INVALID_PREPARATION_DOCUMENT") from None
     # Original prose is validated as stored but never copied into the capture.
-    if not clean["originalText"]:
-        raise GenerationFoundationError("PREPARATION_NOT_READY")
-    return {key: clean[key] for key in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking")}
+    return {key: clean[key] for key in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking", "scheduleItems")}
 
 
 def _capture(conn: Any, trip_id: str, authorize: Callable) -> ConfirmedPreparationSnapshot:
@@ -98,25 +96,33 @@ def _capture(conn: Any, trip_id: str, authorize: Callable) -> ConfirmedPreparati
             raise GenerationFoundationError("PREPARATION_NOT_READY")
         if not any(str(member["id"]) == str(actor["id"]) and member["role"] == "OWNER" for member in members):
             raise GenerationFoundationError("NOT_AUTHORIZED")
-        docs = conn.execute(text("SELECT member_id,draft_json,preference_version,confirmed_conditions_version,confirmed_preference_version,confirmed_at FROM member_preparation_documents WHERE trip_id=:t FOR UPDATE"), {"t": trip_id}).mappings().all()
+        docs = conn.execute(text("SELECT member_id,preference_version,confirmed_conditions_version,confirmed_preference_version,confirmed_at FROM member_preparation_documents WHERE trip_id=:t FOR UPDATE"), {"t": trip_id}).mappings().all()
         by_member = {str(d["member_id"]): d for d in docs}
         active_count = len(members)
         required = ("region", "startDate", "endDate", "expectedPeople", "budget", "transport")
-        if any(conditions.get(k) is None for k in required) or conditions["expectedPeople"] != active_count:
+        if any(conditions.get(k) is None for k in required):
+            raise GenerationFoundationError("PREPARATION_NOT_READY")
+
+        owner = next((m for m in members if m["role"] == "OWNER"), None)
+        owner_doc = by_member.get(str(owner["id"])) if owner else None
+        if not owner or not _confirmed_doc(owner_doc, cv):
             raise GenerationFoundationError("PREPARATION_NOT_READY")
 
         prefs = []
         versions = []
-        for index, member in enumerate(members, start=1):
+        for member in members:
             mid = str(member["id"])
             doc = by_member.get(mid)
             if not _confirmed_doc(doc, cv):
+                continue
+            draft_row = conn.execute(text("SELECT draft_json FROM member_preparation_documents WHERE trip_id=:t AND member_id=:m"), {"t": trip_id, "m": mid}).mappings().first()
+            if not draft_row:
                 raise GenerationFoundationError("PREPARATION_NOT_READY")
-            pref = _clean_preference(_json_value(doc["draft_json"]))
-            if not pref["likes"] or pref["walking"] not in preparation.WALKING:
+            pref = _clean_preference(_json_value(draft_row["draft_json"]))
+            if member["role"] == "OWNER" and (not pref["likes"] or pref["walking"] not in preparation.WALKING):
                 raise GenerationFoundationError("PREPARATION_NOT_READY")
-            prefs.append({"memberRef": f"p{index}", **pref})
-            versions.append({"memberId": mid, "preferenceVersion": int(doc["preference_version"]),
+            prefs.append({"memberRef": f"p{len(prefs) + 1}", **pref})
+            versions.append({"memberId": mid, "role": str(member["role"]), "preferenceVersion": int(doc["preference_version"]),
                              "confirmedConditionsVersion": int(doc["confirmed_conditions_version"]),
                              "confirmedPreferenceVersion": int(doc["confirmed_preference_version"])})
 
