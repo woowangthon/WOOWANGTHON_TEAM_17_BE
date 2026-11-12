@@ -55,6 +55,6 @@ Run the canvas-only SQLite suite with `.venv/Scripts/python.exe -m pytest -q tes
 - 백엔드만 변경했다. `X-Canvas-Route-Geometry: 1` 요청만 geometry를 추가하며 헤더 없음/다른 값은 기존 응답 형식을 보존한다. FE 연결·화면 변경은 포함하지 않는다.
 - `python -m pytest -q tests/test_canvas_routes.py tests/test_routing_validation.py`: 38개 통과. SQLite·fake provider로 응답 호환성, 캐시, 잘못된 geometry와 기존 권한/버전/좌표 fence를 검사했다.
 - 격리 SQLite의 동일 endpoint에 실제 기존 KakaoRouter를 연결하고 공개 관광지 도담삼봉→단양 구경시장을 조회했다. 자동차 verified/79점/4,011m, 도보 verified/78점/3,516m를 반환했고 각 mode의 무헤더 재요청에는 geometry가 없었다. 거리·시간은 조회 시점 값이며 모든 구간의 지원을 보장하지 않는다. 키는 BE 개인 설정에서만 읽고 출력·복사하지 않았다. 공용 DB/실제 여행방은 사용하지 않았다.
-- 전체 `python -m pytest -q -m 'not mysql'`: 201개 통과·9개 실패·MySQL 177개 제외. 실패는 candidate pipeline, confirmed preferences, first-pass schedule, generation draft 관련이다. 변경 전 HEAD의 `app.canvas_routes`를 메모리에 불러 경로 테스트 파일을 제외하고 재실행해 같은 9개 실패를 재현했다(178개 통과·177개 제외). 이 응답 변경과 독립적인 기존 실패로 남겼으며 전체 회귀 통과로 보고하지 않는다.
+- 전체 `python -m pytest -q -m 'not mysql'`: AI를 최신 main `282e6f8`로 fast-forward한 뒤 210개 통과·MySQL 177개 제외. 첫 실행의 AI 관련 9개 실패는 로컬 AI가 `7c2be6f`에 머물러 발생했으며 최신 AI 반영으로 모두 해소됐다. BE 가상환경은 인접 AI 소스를 editable로 불러오고 있어 재설치 없이 반영됐다. 초기 실패를 미해결 문제로 남기지 않는다.
 - Sol high 독립 코드 검토: 미해결 P1/P2 없음. 별도 lint/typecheck 명령은 프로젝트에 등록되지 않아 실행하지 않았다. backend-only 응답 변경으로 브라우저 검수는 해당 없음이다.
 - DB·migration·제공자·비밀키 설정은 변경하지 않았다. 기존 서버를 재시작하면 새 응답을 사용할 수 있으며 FE가 opt-in 헤더와 geometry 표시를 연결하는 작업은 별도 범위다.
