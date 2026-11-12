@@ -29,6 +29,7 @@ class FakeRouter:
     def __init__(self, engine=None, *, status="verified"):
         self.engine = engine
         self.status = status
+        self.geometry = [{"latitude": 36.1, "longitude": 127.1}, {"latitude": 36.5, "longitude": 127.5}]
         self.calls = []
         self.on_call = None
 
@@ -40,7 +41,7 @@ class FakeRouter:
             return {"mode": mode, "status": "unknown", "reasonCodes": ["ROUTE_NOT_FOUND"]}
         return {"mode": mode, "status": "verified", "durationSeconds": 321,
                 "distanceMeters": 654, "knownCostKrw": None, "costComplete": False,
-                "walkingSeconds": None, "geometry": [], "reasonCodes": []}
+                "walkingSeconds": None, "geometry": self.geometry, "reasonCodes": []}
 
 
 @pytest.fixture
@@ -98,13 +99,14 @@ def route_setup():
     engine.dispose()
 
 
-def request_route(client, source=101, target=102, cv=2, mode=None):
+def request_route(client, source=101, target=102, cv=2, mode=None, *, geometry=False):
     params = {
         "sourceContentid": source, "targetContentid": target, "expectedConditionsVersion": cv,
     }
     if mode is not None:
         params["mode"] = mode
-    return client.get(f"/api/v1/trips/{TRIP}/canvas/route", params=params)
+    headers = {"X-Canvas-Route-Geometry": "1"} if geometry else None
+    return client.get(f"/api/v1/trips/{TRIP}/canvas/route", params=params, headers=headers)
 
 
 def test_route_response_exact_shape_direction_mode_and_cache(route_setup):
@@ -129,6 +131,50 @@ def test_route_response_exact_shape_direction_mode_and_cache(route_setup):
                   {"j": json.dumps({"transport": "walk"}), "t": TRIP})
     walking = request_route(client, cv=3)
     assert walking.json()["mode"] == "walk" and len(router.calls) == 3
+
+
+def test_route_geometry_is_opt_in_and_cached_for_both_response_shapes(route_setup):
+    client, _, router = route_setup
+    legacy = request_route(client)
+    assert "geometry" not in legacy.json()
+    detailed = request_route(client, geometry=True)
+    assert detailed.status_code == 200
+    assert detailed.json()["geometry"] == router.geometry
+    assert request_route(client).json() == legacy.json()
+    assert request_route(client, geometry=True).json() == detailed.json()
+    assert len(router.calls) == 1
+
+
+def test_geometry_opt_in_sanitizes_unknown_and_invalid_provider_geometry(route_setup):
+    client, _, router = route_setup
+    router.status = "unknown"
+    unknown = request_route(client, geometry=True).json()
+    assert unknown["status"] == "unknown" and unknown["geometry"] == []
+
+    router.status = "verified"
+    for invalid in [
+        [{"latitude": float("nan"), "longitude": 127.0}],
+        [{"latitude": 91, "longitude": 127.0}],
+        [{"latitude": 36.0, "longitude": 181}],
+        [{"latitude": 36.0, "longitude": 127.0, "crs": "WGS84"}],
+        [{"latitude": 36.0, "longitude": 127.0}] * 2049,
+    ]:
+        router.geometry = invalid
+        router.calls.clear()
+        client.app.state.canvas_route_cache._items.clear()
+        response = request_route(client, source=101, target=103, geometry=True)
+        assert response.status_code == 200 and response.json()["geometry"] == []
+        assert response.json()["status"] == "verified"
+
+
+def test_geometry_header_only_accepts_explicit_opt_in_value(route_setup):
+    client, _, router = route_setup
+    response = client.get(f"/api/v1/trips/{TRIP}/canvas/route", params={
+        "sourceContentid": 101, "targetContentid": 102, "expectedConditionsVersion": 2,
+    }, headers={"X-Canvas-Route-Geometry": "true"})
+    assert response.status_code == 200
+    assert "geometry" not in response.json()
+    assert len(router.calls) == 1
 
 
 def test_route_stale_conditions_rejected_before_provider(route_setup):

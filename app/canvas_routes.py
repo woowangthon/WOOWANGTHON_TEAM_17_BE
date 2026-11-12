@@ -40,7 +40,7 @@ def _coordinate_key(coordinate: dict[str, Any] | None):
 
 def _unknown(mode: str | None, reason: str) -> dict[str, Any]:
     return {"mode": mode, "status": "unknown", "durationSeconds": None,
-            "distanceMeters": None, "checkedAt": _now_iso(), "reasonCodes": [reason]}
+            "distanceMeters": None, "checkedAt": _now_iso(), "reasonCodes": [reason], "geometry": []}
 
 
 class RouteCache:
@@ -142,6 +142,7 @@ def register_canvas_route(app: FastAPI, engine, *, find_session, cookie_name, se
                 raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.", {"mode": "지원 모드를 확인해 주세요."})
         if set(request.query_params.keys()) != allowed_query_keys:
             raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.")
+        include_geometry = request.headers.get("X-Canvas-Route-Geometry") == "1"
 
         snapshot_conn = engine.connect()
         try:
@@ -197,7 +198,8 @@ def register_canvas_route(app: FastAPI, engine, *, find_session, cookie_name, se
             facts = plan_validation._route_facts(router, origin, destination, route_mode)
             return {"mode": route_mode, "status": facts["status"],
                     "durationSeconds": facts["durationSeconds"], "distanceMeters": facts["distanceMeters"],
-                    "checkedAt": facts["checkedAt"], "reasonCodes": facts["reasonCodes"]}
+                    "checkedAt": facts["checkedAt"], "reasonCodes": facts["reasonCodes"],
+                    "geometry": copy.deepcopy(facts.get("geometry", [])) if facts["status"] == "verified" else []}
 
         cache_key = (id(router), route_mode, source_key, target_key)
         result = cache.resolve(cache_key, compute)
@@ -229,8 +231,11 @@ def register_canvas_route(app: FastAPI, engine, *, find_session, cookie_name, se
             raise ApiError(503, "CANVAS_UNAVAILABLE", "캔버스 장소 정보를 불러오지 못했습니다.") from None
         finally:
             final_conn.close()
-        return success({"sourceContentid": source_id, "targetContentid": target_id,
-                        "conditionsVersion": final_version, "mode": route_mode,
-                        "status": result["status"], "durationSeconds": result["durationSeconds"],
-                        "distanceMeters": result["distanceMeters"], "checkedAt": result["checkedAt"],
-                        "reasonCodes": list(result["reasonCodes"])}, request)
+        payload = {"sourceContentid": source_id, "targetContentid": target_id,
+                   "conditionsVersion": final_version, "mode": route_mode,
+                   "status": result["status"], "durationSeconds": result["durationSeconds"],
+                   "distanceMeters": result["distanceMeters"], "checkedAt": result["checkedAt"],
+                   "reasonCodes": list(result["reasonCodes"])}
+        if include_geometry:
+            payload["geometry"] = copy.deepcopy(result["geometry"])
+        return success(payload, request)
