@@ -49,6 +49,8 @@ def _fully_covered(clause: str, phrases: list[str]) -> bool:
 
 
 def analyze_preferences(preferences: list[dict[str, Any]], supported_tags) -> dict[str, Any]:
+    from .walking_preferences import resolve_walking_preference
+
     tags = set(supported_tags)
     predicates: list[dict[str, Any]] = []
     issues: list[dict[str, str]] = []
@@ -56,6 +58,12 @@ def analyze_preferences(preferences: list[dict[str, Any]], supported_tags) -> di
         ref = pref["memberRef"]
         for field in ("likes", "avoid", "food"):
             source = pref.get(field)
+            walking_resolution = None
+            if field == "avoid":
+                walking_resolution = resolve_walking_preference(pref)
+                source = walking_resolution["remainingAvoid"]
+                if walking_resolution["issue"]:
+                    issues.append({"field": "walking", "code": "REQUIRED_PREFERENCE_UNSATISFIED"})
             if not isinstance(source, str) or not source.strip():
                 continue
             importance = pref.get("foodImportance") if field == "food" else pref.get("avoidImportance") if field == "avoid" else "preferred"

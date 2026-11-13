@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
-GENERATION_POLICY_VERSION = "category-diversity-car40-v1"
+GENERATION_POLICY_VERSION = "category-diversity-car40-walking-v2"
 CAR_LEG_MAX_SECONDS = 40 * 60
 
 

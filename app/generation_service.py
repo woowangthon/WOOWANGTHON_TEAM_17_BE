@@ -110,8 +110,12 @@ class GenerationService:
                     raw_draft = _json(draft_row["draft_json"])
                     draft = preparation.validate_draft({**raw_draft, "scheduleItems": raw_draft.get("scheduleItems", [])})
                     source_document_digest = hashlib.sha256(_canonical(draft).encode()).hexdigest()
+                    from .walking_preferences import resolve_walking_preference
+                    walking_issue = resolve_walking_preference(draft)["issue"]
+                    if walking_issue:
+                        required_ready = False
                     if m["role"] == "OWNER":
-                        required_ready = bool(draft["likes"] and draft["walking"] in preparation.WALKING)
+                        required_ready = required_ready and bool(draft["likes"] and draft["walking"] in preparation.WALKING)
                     _, unresolved = preparation._schedule_clarifications(conn, draft["scheduleItems"])
                     schedule_ready = not unresolved
                 except Exception:
@@ -157,6 +161,9 @@ class GenerationService:
                 issues.add("PREPARATION_NOT_READY"); continue
             if member["role"] != "OWNER" and any(item["scope"] == "group" for item in draft["scheduleItems"]):
                 issues.add("SCHEDULE_SCOPE_INVALID")
+            from .walking_preferences import resolve_walking_preference
+            if resolve_walking_preference(draft)["issue"]:
+                issues.add("REQUIRED_PREFERENCE_UNSATISFIED")
             pref = {"memberRef": "p1", **{k: draft[k] for k in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking", "scheduleItems")}}
             confirmed_group.append({**pref, "memberRef": f"p{len(confirmed_group) + 1}"})
             if member["role"] == "OWNER":
@@ -292,6 +299,11 @@ class GenerationService:
             dto = generation_reviews.normalization_dto(raw, review, version, current) if raw and current else {"normalization": None, "reviewVersion": version, "review": review if current else None, "stale": bool(row)}
             from .candidate_selection import build_supported_tags
             issues = confirmed_preferences.preference_issues(snapshot.confirmed_preferences(), build_supported_tags(catalog))
+            from .walking_preferences import resolve_walking_preference
+            if resolve_walking_preference(draft)["issue"]:
+                walking_issue = {"field": "walking", "code": "REQUIRED_PREFERENCE_UNSATISFIED"}
+                if walking_issue not in issues:
+                    issues.append(walking_issue)
             clarifications = []
             if draft.get("scheduleItems"):
                 _, clarifications = preparation._schedule_clarifications(conn, draft["scheduleItems"])

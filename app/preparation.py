@@ -507,6 +507,9 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
             missing = [field for field in ("originalText", "likes") if not draft[field]]
             if draft["walking"] not in WALKING:
                 missing.append("walking")
+            from .walking_preferences import resolve_walking_preference
+            if resolve_walking_preference(draft)["issue"] and "walking" not in missing:
+                missing.append("walking")
             resolved, clarifications = _schedule_clarifications(conn, draft.get("scheduleItems", []))
             if clarifications:
                 missing.extend(f"scheduleItems.{item['itemId']}" for item in clarifications)
