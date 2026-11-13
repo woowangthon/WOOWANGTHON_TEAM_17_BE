@@ -68,7 +68,8 @@ class SQLiteResultAdapter:
         return getattr(self.result, name)
 
 
-def test_generation_readiness_uses_owner_and_never_reads_unconfirmed_drafts():
+@pytest.mark.parametrize("atomic_food_only", [False, True])
+def test_generation_readiness_uses_owner_and_never_reads_unconfirmed_drafts(atomic_food_only):
     engine = create_engine("sqlite://")
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE trip_members (id TEXT, trip_id TEXT, nickname TEXT, role TEXT, status TEXT, created_at TEXT)"))
@@ -79,7 +80,16 @@ def test_generation_readiness_uses_owner_and_never_reads_unconfirmed_drafts():
         conn.execute(text("INSERT INTO trip_members VALUES ('owner','trip','owner','OWNER','ACTIVE','1'), ('guest','trip','guest','MEMBER','ACTIVE','2')"))
         conn.execute(text("INSERT INTO trip_preparation_documents VALUES (:t,:c,1)"), {
             "t": "trip", "c": json.dumps(CONDITIONS | {"lodging": None, "fixedSchedule": None}, ensure_ascii=False)})
-        owner_draft = json.dumps(DRAFT | {"avoid": None, "food": None}, ensure_ascii=False)
+        owner_data = DRAFT | {"avoid": None, "food": None}
+        if atomic_food_only:
+            from chungbuk_trip_ai import build_atomic_preferences
+            original = "여행 중 초밥을 한 번 먹고 싶어요"
+            profile = build_atomic_preferences([{"dimension": "food", "target": "초밥", "polarity": "prefer", "priority": "preferred",
+                "priorityBasis": "unspecified", "scope": "trip", "audience": "unspecified", "frequency": {"count": 1, "operator": "exact", "period": "trip"},
+                "value": None, "unit": None, "approximate": False, "evidence": original}], [], original,
+                CONDITIONS | {"lodging": None, "fixedSchedule": None})
+            owner_data = {**owner_data, "originalText": original, "likes": None, "walking": None, "food": "초밥", "atomicPreferences": profile}
+        owner_draft = json.dumps(owner_data, ensure_ascii=False)
         conn.execute(text("INSERT INTO member_preparation_documents VALUES ('trip','owner',:draft,1,1,1,'2026-11-11T00:00:00Z')"), {"draft": owner_draft})
         # Invalid JSON ensures an unchecked document must not be parsed.
         conn.execute(text("INSERT INTO member_preparation_documents VALUES ('trip','guest','not-json',8,NULL,NULL,NULL)"))

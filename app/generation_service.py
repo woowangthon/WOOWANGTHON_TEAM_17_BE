@@ -18,7 +18,8 @@ from typing import Any, Callable
 from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
 
-from . import confirmed_preferences, generation_foundation as foundation, generation_reviews, place_catalog, preparation
+from . import confirmed_preferences, generation_foundation as foundation, generation_reviews, place_catalog, preparation, preference_profile
+from .group_preferences import build_group_preferences
 
 
 class ServiceError(Exception):
@@ -111,7 +112,13 @@ class GenerationService:
                     draft = preparation.validate_draft({**raw_draft, "scheduleItems": raw_draft.get("scheduleItems", [])})
                     source_document_digest = hashlib.sha256(_canonical(draft).encode()).hexdigest()
                     if m["role"] == "OWNER":
-                        required_ready = bool(draft["likes"] and draft["walking"] in preparation.WALKING)
+                        profile = draft.get("atomicPreferences")
+                        if profile is not None:
+                            conditions, live_cv = preparation._conditions(conn, trip_id)
+                            checked = preference_profile.response_profile_status(profile, draft.get("originalText"), conditions)
+                            required_ready = live_cv == cv and not preparation._confirmation_missing({**draft, "atomicPreferences": checked}, 2)
+                        else:
+                            required_ready = bool(draft["likes"] and draft["walking"] in preparation.WALKING)
                     _, unresolved = preparation._schedule_clarifications(conn, draft["scheduleItems"])
                     schedule_ready = not unresolved
                 except Exception:
@@ -262,14 +269,19 @@ class GenerationService:
         draft = preparation.validate_draft(_json(row["draft_json"]))
         if not draft["originalText"]:
             raise ServiceError("PREFERENCES_UNCONFIRMED", 409)
+        profile = draft.get("atomicPreferences")
+        checked = preference_profile.response_profile_status(profile, draft.get("originalText"), conditions) if profile is not None else None
+        if profile is not None and (not isinstance(checked, dict) or checked.get("status") != "current"):
+            raise ServiceError("PREFERENCES_UNCONFIRMED", 409)
         prefs = [{"memberRef": "p1", **{k: draft[k] for k in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking", "scheduleItems")}}]
+        group_conditions = build_group_preferences([{"memberRef": "p1", "confirmed": True, "atomicPreferences": checked}]) if checked else build_group_preferences([])
         identity = {"tripId": trip_id, "sessionId": session["id"], "actorMemberId": member["id"],
                     "actorRole": member["role"], "conditionsVersion": cv,
                     "members": [{"memberId": member["id"], "preferenceVersion": int(row["preference_version"]),
                                  "confirmedConditionsVersion": int(row["confirmed_conditions_version"]),
                                  "confirmedPreferenceVersion": int(row["confirmed_preference_version"])}]}
-        stamp = {"conditions": conditions, "conditionsVersion": cv, "confirmedPreferences": prefs, "_identity": identity}
-        fingerprint = hashlib.sha256(_canonical({**identity, "confirmedPreferences": prefs}).encode()).hexdigest()
+        stamp = {"conditions": conditions, "conditionsVersion": cv, "confirmedPreferences": prefs, "groupConditions": group_conditions, "_identity": identity}
+        fingerprint = hashlib.sha256(_canonical({**identity, "confirmedPreferences": prefs, "groupConditions": group_conditions}).encode()).hexdigest()
         return foundation.ConfirmedPreparationSnapshot(_canonical(stamp), fingerprint), draft, int(row["preference_version"]), member, session
 
     def get_my_preference(self, request, trip_id):

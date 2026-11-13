@@ -8,6 +8,8 @@ from app.generation_foundation import (
     GenerationFoundationError,
     capture_confirmed_preparation,
 )
+from app.preparation import validate_conditions
+from chungbuk_trip_ai import build_atomic_preferences, mark_atomic_preferences_stale
 
 
 CONDITIONS = {"region": "충북", "startDate": "2026-12-12", "endDate": "2026-12-13",
@@ -94,3 +96,68 @@ def test_capture_rejects_non_owner_and_unconfirmed_members_safely():
         def connect(self): return Unconfirmed()
     with pytest.raises(GenerationFoundationError, match="PREPARATION_NOT_READY"):
         capture_confirmed_preparation(Engine(), "trip-1", authorize)
+
+
+def test_confirmed_atomic_food_only_profile_with_unspecified_walking_can_be_captured():
+    text = "여행 중 초밥을 한 번 먹고 싶어요"
+    profile = build_atomic_preferences([{
+        "dimension": "food", "target": "초밥", "polarity": "prefer", "priority": "preferred", "priorityBasis": "unspecified",
+        "scope": "trip", "audience": "personal", "frequency": {"count": 1, "operator": "exact", "period": "trip"},
+        "value": None, "unit": None, "approximate": False, "evidence": text,
+    }], [], text, validate_conditions(CONDITIONS))
+    class AtomicConnection(FakeConnection):
+        def execute(self, query, params):
+            result = super().execute(query, params)
+            if "SELECT draft_json" in str(query):
+                return Result([{**result.rows[0], "draft_json": json.dumps({**DRAFT, "originalText": text, "likes": None, "food": "초밥", "walking": None, "atomicPreferences": profile}, ensure_ascii=False)}])
+            return result
+    class Engine:
+        def connect(self): return AtomicConnection()
+    snapshot = capture_confirmed_preparation(Engine(), "trip-1", authorize)
+    assert snapshot.confirmed_preferences()[0]["walking"] is None
+    assert snapshot.group_conditions()["softSupport"][0]["target"] == "초밥"
+
+
+def test_snapshot_carries_only_current_atomic_group_and_member_hard_conditions():
+    conditions = validate_conditions(CONDITIONS)
+    evidence = "숲길은 꼭 가고 싶어요. 땅콩 알레르기가 있어요."
+    profile = build_atomic_preferences([
+        {"dimension": "activity", "target": "숲길", "polarity": "prefer", "priority": "required",
+         "priorityBasis": "explicit", "scope": "trip", "audience": "group", "frequency": None,
+         "value": None, "unit": None, "approximate": False, "evidence": "숲길은 꼭 가고 싶어요"},
+        {"dimension": "food", "target": "땅콩", "polarity": "avoid", "priority": "required",
+         "priorityBasis": "explicit", "scope": "trip", "audience": "personal", "frequency": None,
+         "value": None, "unit": None, "approximate": False, "evidence": "땅콩 알레르기가 있어요"},
+    ], [], evidence, conditions)
+
+    class AtomicConnection(FakeConnection):
+        def execute(self, query, params):
+            result = super().execute(query, params)
+            if "member_preparation_documents" in str(query):
+                draft = {**DRAFT, "originalText": evidence, "atomicPreferences": profile}
+                return Result([{**result.rows[0], "draft_json": json.dumps(draft, ensure_ascii=False)}])
+            return result
+
+    class AtomicEngine:
+        def connect(self): return AtomicConnection()
+
+    snapshot = capture_confirmed_preparation(AtomicEngine(), "trip-1", authorize)
+    group = snapshot.as_dict()["groupConditions"]
+    assert group["conditions"][0]["target"] == "숲길"
+    assert group["conditions"][0]["memberReferences"] == ["p1"]
+    assert group["memberScopedConstraints"][0]["target"] == "땅콩"
+    assert group["memberScopedConstraints"][0]["memberRef"] == "p1"
+    assert all("evidence" not in item for item in group["conditions"] + group["memberScopedConstraints"])
+
+    stale = mark_atomic_preferences_stale(profile)
+    class StaleConnection(AtomicConnection):
+        def execute(self, query, params):
+            result = super().execute(query, params)
+            if "member_preparation_documents" in str(query):
+                draft = {**DRAFT, "originalText": evidence, "atomicPreferences": stale}
+                return Result([{**result.rows[0], "draft_json": json.dumps(draft, ensure_ascii=False)}])
+            return result
+    class StaleEngine:
+        def connect(self): return StaleConnection()
+    assert capture_confirmed_preparation(StaleEngine(), "trip-1", authorize).as_dict()["groupConditions"] == {
+        "conditions": [], "softSupport": [], "memberScopedConstraints": [], "conflicts": []}

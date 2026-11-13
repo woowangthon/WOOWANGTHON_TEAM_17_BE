@@ -13,7 +13,8 @@ from typing import Any, Callable
 
 from sqlalchemy import text
 
-from app import preparation
+from app import preparation, preference_profile
+from app.group_preferences import build_group_preferences
 
 
 class GenerationFoundationError(Exception):
@@ -48,6 +49,9 @@ class ConfirmedPreparationSnapshot:
     def confirmed_preferences(self) -> list[dict[str, Any]]:
         return json.loads(self._document)["confirmedPreferences"]
 
+    def group_conditions(self) -> dict[str, Any]:
+        return json.loads(self._document).get("groupConditions", {"conditions": [], "memberScopedConstraints": []})
+
 
 def _confirmed_doc(row: Any, conditions_version: int) -> bool:
     if not row or row["confirmed_at"] is None:
@@ -59,7 +63,10 @@ def _confirmed_doc(row: Any, conditions_version: int) -> bool:
 
 
 def _clean_preference(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, dict) or set(raw) not in (set(preparation.PERSONAL_KEYS), set(preparation.PERSONAL_KEYS) | {"scheduleItems"}):
+    allowed = (frozenset(preparation.PERSONAL_KEYS), frozenset(preparation.PERSONAL_KEYS) | {"scheduleItems"},
+               frozenset(preparation.PERSONAL_KEYS) | {"atomicPreferences"},
+               frozenset(preparation.PERSONAL_KEYS) | {"scheduleItems", "atomicPreferences"})
+    if not isinstance(raw, dict) or set(raw) not in allowed:
         raise GenerationFoundationError("INVALID_PREPARATION_DOCUMENT")
     try:
         clean = preparation.validate_draft({**raw, "scheduleItems": raw.get("scheduleItems", [])})
@@ -109,6 +116,7 @@ def _capture(conn: Any, trip_id: str, authorize: Callable) -> ConfirmedPreparati
             raise GenerationFoundationError("PREPARATION_NOT_READY")
 
         prefs = []
+        atomic_members = []
         versions = []
         for member in members:
             mid = str(member["id"])
@@ -118,10 +126,17 @@ def _capture(conn: Any, trip_id: str, authorize: Callable) -> ConfirmedPreparati
             draft_row = conn.execute(text("SELECT draft_json FROM member_preparation_documents WHERE trip_id=:t AND member_id=:m"), {"t": trip_id, "m": mid}).mappings().first()
             if not draft_row:
                 raise GenerationFoundationError("PREPARATION_NOT_READY")
-            pref = _clean_preference(_json_value(draft_row["draft_json"]))
-            if member["role"] == "OWNER" and (not pref["likes"] or pref["walking"] not in preparation.WALKING):
+            raw_draft = _json_value(draft_row["draft_json"])
+            pref = _clean_preference(raw_draft)
+            profile = raw_draft.get("atomicPreferences") if isinstance(raw_draft, dict) else None
+            checked_profile = preference_profile.response_profile_status(profile, raw_draft.get("originalText"), conditions) if profile else None
+            atomic_current = isinstance(checked_profile, dict) and checked_profile.get("status") == "current"
+            if member["role"] == "OWNER" and not atomic_current and (not pref["likes"] or pref["walking"] not in preparation.WALKING):
                 raise GenerationFoundationError("PREPARATION_NOT_READY")
             prefs.append({"memberRef": f"p{len(prefs) + 1}", **pref})
+            if isinstance(checked_profile, dict) and checked_profile.get("status") == "current":
+                atomic_members.append({"memberRef": f"p{len(prefs)}", "confirmed": True,
+                                       "atomicPreferences": checked_profile})
             versions.append({"memberId": mid, "role": str(member["role"]), "preferenceVersion": int(doc["preference_version"]),
                              "confirmedConditionsVersion": int(doc["confirmed_conditions_version"]),
                              "confirmedPreferenceVersion": int(doc["confirmed_preference_version"])})
@@ -129,10 +144,13 @@ def _capture(conn: Any, trip_id: str, authorize: Callable) -> ConfirmedPreparati
         stamp = {"tripId": str(trip["id"]), "sessionId": str(session["id"]), "actorMemberId": str(actor["id"]),
                  "actorRole": str(actor["role"]), "conditionsVersion": cv,
                  "conditions": conditions, "members": versions}
-        public = {"conditions": conditions, "conditionsVersion": cv, "confirmedPreferences": prefs}
+        group_conditions = build_group_preferences(atomic_members)
+        public = {"conditions": conditions, "conditionsVersion": cv, "confirmedPreferences": prefs,
+                  "groupConditions": group_conditions}
         # Include sanitized preferences as well as versions, so out-of-band edits
         # cannot bypass stale-input detection by leaving version counters intact.
-        fingerprint = hashlib.sha256(_canonical({**stamp, "confirmedPreferences": prefs}).encode("utf-8")).hexdigest()
+        fingerprint = hashlib.sha256(_canonical({**stamp, "confirmedPreferences": prefs,
+                                                  "groupConditions": group_conditions}).encode("utf-8")).hexdigest()
         return ConfirmedPreparationSnapshot(_canonical({**public, "_identity": stamp}), fingerprint)
     except GenerationFoundationError:
         raise

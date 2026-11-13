@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import re
@@ -13,6 +14,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
+
+from . import preference_profile
 
 
 CONDITION_KEYS = ("region", "startDate", "endDate", "expectedPeople", "budget", "transport", "departure", "returnRoute", "lodging", "fixedSchedule", "departureTime", "departureContentid")
@@ -119,7 +122,7 @@ def validate_conditions(raw: Any) -> dict[str, Any]:
 
 
 def validate_draft(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, dict) or set(raw) - (set(PERSONAL_KEYS) | {"scheduleItems"}) or set(raw) - {"scheduleItems"} != set(PERSONAL_KEYS):
+    if not isinstance(raw, dict) or set(raw) - (set(PERSONAL_KEYS) | {"scheduleItems", "atomicPreferences"}) or set(raw) - {"scheduleItems", "atomicPreferences"} != set(PERSONAL_KEYS):
         _fail(400, "VALIDATION_ERROR", {"draft": "필수 필드 구성을 확인해 주세요."})
     data = {**raw, "scheduleItems": raw.get("scheduleItems", [])}
     out = {"originalText": _text(data["originalText"], "draft.originalText", 5000, True)}
@@ -173,6 +176,10 @@ def validate_draft(raw: Any) -> dict[str, Any]:
         clean_items.append({"id": item_id, "kind": kind, "scope": scope, "placeQuery": query,
                             "contentid": cid, **values})
     out["scheduleItems"] = clean_items
+    if "atomicPreferences" in raw:
+        if raw["atomicPreferences"] is not None and not isinstance(raw["atomicPreferences"], dict):
+            _fail(400, "VALIDATION_ERROR", {"draft.atomicPreferences": "객체 또는 null을 입력해 주세요."})
+        out["atomicPreferences"] = raw["atomicPreferences"]
     return out
 
 
@@ -190,12 +197,14 @@ def _initial_draft() -> dict[str, Any]:
     return {"originalText": None, "likes": None, "avoid": None, "avoidImportance": "required", "food": None, "foodImportance": "preferred", "walking": None, "scheduleItems": []}
 
 
-def _response(row: Any, conditions_version: int) -> dict[str, Any]:
-    draft = _json(row["draft_json"]) if row else _initial_draft()
+def _response(row: Any, conditions_version: int, *, schema_version: int = 1, conditions: dict[str, Any] | None = None) -> dict[str, Any]:
+    draft = copy.deepcopy(_json(row["draft_json"])) if row else _initial_draft()
     draft.setdefault("scheduleItems", [])
+    if schema_version == 1:
+        draft.pop("atomicPreferences", None)
     version = int(row["preference_version"]) if row else 0
     confirmed = bool(row and row["confirmed_at"] is not None and row["confirmed_conditions_version"] == conditions_version and row["confirmed_preference_version"] == version)
-    return {
+    response = {
         "conditionsVersion": conditions_version,
         "preferenceVersion": version,
         "draft": draft,
@@ -206,6 +215,30 @@ def _response(row: Any, conditions_version: int) -> dict[str, Any]:
             "confirmedAt": _iso(row["confirmed_at"]) if confirmed else None,
         },
     }
+    if schema_version == 2:
+        response["draft"]["atomicPreferences"] = preference_profile.response_profile_status(
+            response["draft"].get("atomicPreferences"), response["draft"].get("originalText"), conditions or {})
+    return response
+
+
+def _preference_schema(request: Request, ApiError) -> int:
+    value = request.headers.get("X-Preference-Schema")
+    if value is None:
+        return 1
+    if value != "2":
+        raise ApiError(400, "VALIDATION_ERROR", "X-Preference-Schema은 2만 지원합니다.")
+    return 2
+
+
+def _confirmation_missing(draft: dict[str, Any], schema_version: int) -> list[str]:
+    profile = draft.get("atomicPreferences")
+    atomic_current = schema_version == 2 and isinstance(profile, dict) and profile.get("status") == "current"
+    missing = [field for field in (("originalText",) if atomic_current else ("originalText", "likes")) if not draft.get(field)]
+    if not atomic_current and draft.get("walking") not in WALKING:
+        missing.append("walking")
+    if schema_version == 2 and isinstance(profile, dict) and profile.get("status") != "current":
+        missing.append("atomicPreferences")
+    return missing
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -253,6 +286,26 @@ def _conditions(conn, trip_id: str):
 
 def _personal(conn, trip_id: str, member_id: str):
     return conn.execute(text("SELECT draft_json,preference_version,confirmed_conditions_version,confirmed_preference_version,confirmed_at FROM member_preparation_documents WHERE trip_id=:t AND member_id=:m FOR UPDATE"), {"t": trip_id, "m": member_id}).mappings().first()
+
+
+def _cached_analysis_profile(conn, receipt: str, session_id: str, trip_id: str, member_id: str,
+                             conditions_version: int, preference_version: int, original_text: str,
+                             conditions: dict[str, Any]) -> dict[str, Any]:
+    path = INTERPRET_PATH.format(trip_id=trip_id)
+    row = conn.execute(text("SELECT result_json,trip_id,member_id,conditions_version,preference_version,status,expires_at FROM preparation_interpret_requests WHERE session_id=:s AND method='POST' AND path=:p AND idempotency_key=:k FOR UPDATE"),
+                       {"s": session_id, "p": path, "k": receipt}).mappings().first()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if (not row or row["trip_id"] != trip_id or row["member_id"] != member_id or row["status"] != "COMPLETE"
+            or int(row["conditions_version"]) != conditions_version or int(row["preference_version"]) != preference_version
+            or row["expires_at"] <= now):
+        _fail(409, "STALE_AI_RESULT")
+    try:
+        cached = _json(row["result_json"])
+        if cached.get("sourceConditionsVersion") != conditions_version or cached.get("sourcePreferenceVersion") != preference_version:
+            raise ValueError
+        return preference_profile.profile_from_cached_result(cached, receipt, original_text, conditions)
+    except Exception:
+        _fail(409, "STALE_AI_RESULT")
 
 
 def _schedule_clarifications(conn, items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -414,11 +467,12 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
     @app.get("/api/v1/trips/{trip_id}/preferences/me")
     def get_my_preferences(trip_id: str, request: Request):
         trip_id = _trip_id(trip_id, ApiError)
+        schema_version = _preference_schema(request, ApiError)
         def action(conn):
             _, _, member = _access(conn, request, trip_id, find_session, cookie_name)
-            _, conditions_version = _conditions(conn, trip_id)
+            conditions, conditions_version = _conditions(conn, trip_id)
             row = _personal(conn, trip_id, member["id"])
-            dto = _response(row, conditions_version)
+            dto = _response(row, conditions_version, schema_version=schema_version, conditions=conditions)
             resolved, clarifications = _schedule_clarifications(conn, dto["draft"].get("scheduleItems", []))
             dto["draft"]["scheduleItems"] = resolved
             dto["clarifications"] = clarifications
@@ -429,14 +483,29 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
     async def put_my_preferences(trip_id: str, request: Request):
         trip_id = _trip_id(trip_id, ApiError)
         origin_check(request)
-        body = await body_json(request, {"expectedConditionsVersion", "expectedPreferenceVersion", "draft"})
-        if set(body) != {"expectedConditionsVersion", "expectedPreferenceVersion", "draft"}:
+        schema_version = _preference_schema(request, ApiError)
+        body = await body_json(request, {"expectedConditionsVersion", "expectedPreferenceVersion", "draft", "analysisReceipt"})
+        required_body = {"expectedConditionsVersion", "expectedPreferenceVersion", "draft"}
+        if set(body) not in (required_body, required_body | {"analysisReceipt"}):
             raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.")
+        if schema_version == 1 and "analysisReceipt" in body:
+            raise ApiError(400, "VALIDATION_ERROR", "analysisReceipt는 X-Preference-Schema: 2에서만 사용할 수 있습니다.")
+        receipt = body.get("analysisReceipt")
+        if receipt is not None:
+            try:
+                normalized_receipt = str(uuid.UUID(receipt))
+                if not isinstance(receipt, str) or normalized_receipt != receipt.lower() or schema_version != 2:
+                    raise ValueError
+                receipt = normalized_receipt
+            except (ValueError, AttributeError, TypeError):
+                raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.") from None
         ec = _validated(lambda: _version(body["expectedConditionsVersion"], "expectedConditionsVersion"), ApiError)
         ep = _validated(lambda: _version(body["expectedPreferenceVersion"], "expectedPreferenceVersion"), ApiError)
         draft = _validated(lambda: validate_draft(body["draft"]), ApiError)
+        if schema_version != 2 and "atomicPreferences" in draft:
+            raise ApiError(400, "VALIDATION_ERROR", "atomicPreferences는 X-Preference-Schema: 2에서만 사용할 수 있습니다.")
         def action(conn):
-            _, _, member = _access(conn, request, trip_id, find_session, cookie_name)
+            session, _, member = _access(conn, request, trip_id, find_session, cookie_name)
             group_scope_errors = {f"draft.scheduleItems.{index}.scope": "공통 일정은 방장만 지정할 수 있습니다."
                                   for index, item in enumerate(draft["scheduleItems"])
                                   if member["role"] != "OWNER" and item["scope"] == "group"}
@@ -444,20 +513,66 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
                 _fail(400, "VALIDATION_ERROR", group_scope_errors)
             resolved, _ = _schedule_clarifications(conn, draft["scheduleItems"])
             draft["scheduleItems"] = resolved
-            _, cv = _conditions(conn, trip_id)
+            conditions, cv = _conditions(conn, trip_id)
             row = _personal(conn, trip_id, member["id"])
             pv = int(row["preference_version"]) if row else 0
             if ec != cv or ep != pv:
                 _fail(409, "VERSION_CONFLICT", conditions=cv, preference=pv)
             current_draft = _initial_draft()
+            raw_current = {}
             if row:
                 try:
                     raw_current = _json(row["draft_json"])
                     current_draft = validate_draft({**raw_current, "scheduleItems": raw_current.get("scheduleItems", [])})
                 except Exception:
                     current_draft = None
+            existing_profile = raw_current.get("atomicPreferences") if isinstance(raw_current, dict) else None
+            if receipt is not None and (schema_version != 2 or draft.get("atomicPreferences") is None):
+                _fail(400, "VALIDATION_ERROR", {"analysisReceipt": "해석 profile과 함께 보내 주세요."})
+            if schema_version == 2 and "atomicPreferences" in draft:
+                supplied_profile = draft.get("atomicPreferences")
+                if supplied_profile is None:
+                    draft.pop("atomicPreferences", None)
+                else:
+                    trusted_profile = None
+                    if receipt is not None:
+                        trusted_profile = _cached_analysis_profile(conn, receipt, session["id"], trip_id, member["id"],
+                                                                   cv, pv, draft["originalText"], conditions)
+                    try:
+                        draft["atomicPreferences"] = preference_profile.apply_client_profile_edits(
+                            supplied_profile, existing_profile, draft["originalText"], conditions,
+                            trusted_profile=trusted_profile)
+                        def facts(profile):
+                            if not isinstance(profile, dict): return None
+                            return [{k: v for k, v in item.items() if k not in {"id", "origin"}}
+                                    for item in profile.get("conditions", [])]
+                        legacy_keys = set(SUGGESTION_KEYS) - {"scheduleItems"}
+                        legacy_changed = isinstance(current_draft, dict) and any(
+                            current_draft.get(k) != draft.get(k) for k in legacy_keys)
+                        atomic_changed = facts(existing_profile) != facts(draft["atomicPreferences"])
+                        if receipt is None and existing_profile is not None and legacy_changed and not atomic_changed:
+                            # A legacy edit cannot silently certify the old atomic
+                            # facts as current. Modern FE uses the atom editor.
+                            draft["atomicPreferences"]["status"] = "stale"
+                        elif draft["atomicPreferences"]["status"] == "current":
+                            from chungbuk_trip_ai.ensemble import _project_legacy
+                            projected, _ = _project_legacy(draft["atomicPreferences"]["conditions"])
+                            for field in legacy_keys:
+                                draft[field] = projected[field]
+                    except Exception:
+                        _fail(400, "VALIDATION_ERROR", {"draft.atomicPreferences": "원문과 profile 필드를 확인해 주세요."})
+            elif existing_profile is not None:
+                current_legacy = {k: current_draft.get(k) for k in SUGGESTION_KEYS} if isinstance(current_draft, dict) else None
+                incoming_legacy = {k: draft.get(k) for k in SUGGESTION_KEYS}
+                try:
+                    preserved = preference_profile.response_profile_status(existing_profile, draft["originalText"], conditions)
+                    if current_legacy != incoming_legacy and preserved is not None:
+                        preserved["status"] = "stale"
+                    draft["atomicPreferences"] = preserved
+                except Exception:
+                    draft["atomicPreferences"] = None
             if current_draft == draft:
-                return _response(row, cv)
+                return _response(row, cv, schema_version=schema_version, conditions=conditions)
             new_pv = pv + 1
             encoded = json.dumps(draft, ensure_ascii=False, separators=(",", ":"))
             if row:
@@ -465,7 +580,7 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
             else:
                 conn.execute(text("INSERT INTO member_preparation_documents(trip_id,member_id,draft_json,preference_version) VALUES(:t,:m,:j,:v)"), {"t": trip_id, "m": member["id"], "j": encoded, "v": new_pv})
             fresh = _personal(conn, trip_id, member["id"])
-            return _response(fresh, cv)
+            return _response(fresh, cv, schema_version=schema_version, conditions=conditions)
         try:
             return success(await run_in_threadpool(execute, request, action), request)
         except PrepFailure as exc:
@@ -475,6 +590,7 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
     async def confirm_my_preferences(trip_id: str, request: Request):
         trip_id = _trip_id(trip_id, ApiError)
         origin_check(request)
+        schema_version = _preference_schema(request, ApiError)
         body = await body_json(request, {"expectedConditionsVersion", "expectedPreferenceVersion", "reviewed"})
         if set(body) != {"expectedConditionsVersion", "expectedPreferenceVersion", "reviewed"}:
             raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.")
@@ -484,34 +600,35 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
             raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.")
         def action(conn):
             _, _, member = _access(conn, request, trip_id, find_session, cookie_name)
-            _, cv = _conditions(conn, trip_id)
+            conditions, cv = _conditions(conn, trip_id)
             row = _personal(conn, trip_id, member["id"])
             pv = int(row["preference_version"]) if row else 0
             if ec != cv or ep != pv:
                 _fail(409, "VERSION_CONFLICT", conditions=cv, preference=pv)
             draft = _json(row["draft_json"]) if row else _initial_draft()
             draft.setdefault("scheduleItems", [])
+            if schema_version == 2 and draft.get("atomicPreferences") is not None:
+                draft["atomicPreferences"] = preference_profile.response_profile_status(
+                    draft["atomicPreferences"], draft.get("originalText"), conditions)
             group_scope_errors = {f"scheduleItems.{index}.scope": "공통 일정은 방장만 지정할 수 있습니다."
                                   for index, item in enumerate(draft["scheduleItems"])
                                   if member["role"] != "OWNER" and item.get("scope") == "group"}
             if group_scope_errors:
                 _fail(400, "VALIDATION_ERROR", group_scope_errors)
-            missing = [field for field in ("originalText", "likes") if not draft[field]]
-            if draft["walking"] not in WALKING:
-                missing.append("walking")
+            missing = _confirmation_missing(draft, schema_version)
             resolved, clarifications = _schedule_clarifications(conn, draft.get("scheduleItems", []))
             if clarifications:
                 missing.extend(f"scheduleItems.{item['itemId']}" for item in clarifications)
             if missing:
                 _fail(400, "PREFERENCES_INCOMPLETE", {field: "확정 전에 입력해 주세요." for field in missing})
             if row and row["confirmed_conditions_version"] == cv and row["confirmed_preference_version"] == pv and row["confirmed_at"] is not None:
-                return _response(row, cv)
+                return _response(row, cv, schema_version=schema_version, conditions=conditions)
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             if row:
                 conn.execute(text("UPDATE member_preparation_documents SET confirmed_conditions_version=:cv,confirmed_preference_version=:pv,confirmed_at=:n WHERE trip_id=:t AND member_id=:m"), {"cv": cv, "pv": pv, "n": now, "t": trip_id, "m": member["id"]})
             else:
                 conn.execute(text("INSERT INTO member_preparation_documents(trip_id,member_id,draft_json,preference_version,confirmed_conditions_version,confirmed_preference_version,confirmed_at) VALUES(:t,:m,:j,1,:cv,1,:n)"), {"t": trip_id, "m": member["id"], "j": json.dumps(_initial_draft(), separators=(",", ":")), "cv": cv, "n": now})
-            return _response(_personal(conn, trip_id, member["id"]), cv)
+            return _response(_personal(conn, trip_id, member["id"]), cv, schema_version=schema_version, conditions=conditions)
         try:
             return success(await run_in_threadpool(execute, request, action), request)
         except PrepFailure as exc:
@@ -526,7 +643,7 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
             if retry:
                 raise ApiError(429, "RATE_LIMITED", "요청이 너무 많습니다.", retry=retry)
 
-    def reserve_interpret(request: Request, trip_id: str, key: str, expected_cv: int, expected_pv: int):
+    def reserve_interpret(request: Request, trip_id: str, key: str, expected_cv: int, expected_pv: int, schema_version: int):
         conn = engine.connect()
         lock_name = None
         locked = False
@@ -549,7 +666,8 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
                     conditions, cv = _conditions(conn, trip_id)
                     row = _personal(conn, trip_id, member["id"])
                     pv = int(row["preference_version"]) if row else 0
-                    fingerprint = hashlib.sha256(f"{trip_id}|{expected_cv}|{expected_pv}".encode()).hexdigest()
+                    fingerprint_source = f"{trip_id}|{expected_cv}|{expected_pv}" + ("|schema:2" if schema_version == 2 else "")
+                    fingerprint = hashlib.sha256(fingerprint_source.encode()).hexdigest()
                     idem = conn.execute(text("SELECT * FROM preparation_interpret_requests WHERE session_id=:s AND method='POST' AND path=:p AND idempotency_key=:k FOR UPDATE"), {"s": session["id"], "p": path, "k": key}).mappings().first()
                     now = datetime.now(timezone.utc).replace(tzinfo=None)
                     token = str(uuid.uuid4())
@@ -576,7 +694,7 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
                     draft = _json(row["draft_json"]) if row else _initial_draft()
                     if not draft["originalText"]:
                         _fail(400, "ORIGINAL_TEXT_REQUIRED", {"originalText": "먼저 원문을 저장해 주세요."})
-                    return {"token": token, "session_id": session["id"], "member_id": member["id"], "member_role": member["role"], "conditions_version": cv, "preference_version": pv, "original_text": draft["originalText"], "conditions": conditions, "path": path}
+                    return {"token": token, "session_id": session["id"], "member_id": member["id"], "member_role": member["role"], "conditions_version": cv, "preference_version": pv, "original_text": draft["originalText"], "conditions": conditions, "path": path, "schema_version": schema_version}
             except PrepFailure as exc:
                 _api_error(exc, ApiError)
         finally:
@@ -625,6 +743,7 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
     async def interpret_my_preferences(trip_id: str, request: Request):
         trip_id = _trip_id(trip_id, ApiError)
         origin_check(request)
+        schema_version = _preference_schema(request, ApiError)
         body = await body_json(request, {"expectedConditionsVersion", "expectedPreferenceVersion"})
         if set(body) != {"expectedConditionsVersion", "expectedPreferenceVersion"}:
             raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.")
@@ -637,11 +756,14 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
                 raise ValueError
         except (ValueError, AttributeError):
             raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.", {"Idempotency-Key": "UUID 형식이어야 합니다."})
-        reservation = await run_in_threadpool(reserve_interpret, request, trip_id, key, cv, pv)
+        reservation = await run_in_threadpool(reserve_interpret, request, trip_id, key, cv, pv, schema_version)
         if "replay" in reservation:
             return success(reservation["replay"], request)
         reservation["key"] = key
-        interpreter_fn = app.state.preparation_interpreter or _default_interpreter
+        if schema_version == 2:
+            interpreter_fn = getattr(app.state, "preparation_interpreter_v2", None) or _default_interpreter_v2
+        else:
+            interpreter_fn = app.state.preparation_interpreter or _default_interpreter
         try:
             result = await asyncio.wait_for(run_in_threadpool(interpreter_fn, reservation["original_text"], reservation["conditions"]), timeout=app.state.preparation_ai_timeout)
         except asyncio.TimeoutError:
@@ -656,12 +778,16 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
                 raise ApiError(504, "AI_TIMEOUT", "AI 해석 시간이 초과되었습니다.")
             raise ApiError(503, "AI_UNAVAILABLE", "AI 서비스를 사용할 수 없습니다.")
         try:
-            validated = _validate_interpret_result(result, ApiError)
+            validated = _validate_interpret_result(result, ApiError, schema_version=schema_version,
+                                                   original_text=reservation["original_text"], conditions=reservation["conditions"])
         except ApiError:
             await run_in_threadpool(abandon_interpret, reservation)
             raise
         validated["suggestions"] = _member_safe_suggestions(validated["suggestions"], reservation["member_role"])
         payload = {"sourceConditionsVersion": cv, "sourcePreferenceVersion": pv, **validated}
+        if schema_version == 2:
+            # The UUID receipt binds FE's atomic profile echo to this cached result.
+            payload.setdefault("analysisMeta", {})["requestId"] = key
         clarification_conn = engine.connect()
         try:
             _, payload["clarifications"] = _schedule_clarifications(clarification_conn, payload["suggestions"]["scheduleItems"])
@@ -671,8 +797,12 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
         return success(await run_in_threadpool(finish_interpret, request, trip_id, key, reservation, payload), request)
 
 
-def _validate_interpret_result(result: Any, ApiError) -> dict[str, Any]:
-    if not isinstance(result, dict) or set(result) != {"suggestions", "needsWalkingAnswer"} or not isinstance(result["needsWalkingAnswer"], bool):
+def _validate_interpret_result(result: Any, ApiError, *, schema_version: int = 1,
+                              original_text: str | None = None, conditions: dict[str, Any] | None = None) -> dict[str, Any]:
+    expected_top_v1 = {"suggestions", "needsWalkingAnswer"}
+    expected_top_v2 = (frozenset({"suggestions", "needsWalkingAnswer", "atomicPreferences"}),
+                       frozenset({"suggestions", "needsWalkingAnswer", "atomicPreferences", "analysisMeta"}))
+    if not isinstance(result, dict) or (set(result) != expected_top_v1 if schema_version == 1 else frozenset(result) not in expected_top_v2) or not isinstance(result["needsWalkingAnswer"], bool):
         raise ApiError(502, "AI_INVALID_RESPONSE", "AI 응답을 처리하지 못했습니다.")
     try:
         if not isinstance(result["suggestions"], dict):
@@ -681,8 +811,13 @@ def _validate_interpret_result(result: Any, ApiError) -> dict[str, Any]:
         old_suggestion_keys = set(SUGGESTION_KEYS) - {"scheduleItems"}
         if set(raw) == old_suggestion_keys:
             raw["scheduleItems"] = []
-        elif set(raw) != set(SUGGESTION_KEYS):
+        elif set(raw) not in (set(SUGGESTION_KEYS), set(SUGGESTION_KEYS) | {"atomicPreferences"}):
             raise PrepFailure(502, "AI_INVALID_RESPONSE")
+        if schema_version == 2:
+            profile = preference_profile.canonical_interpretation(result["atomicPreferences"], original_text, conditions or {})
+            if "atomicPreferences" in raw:
+                raise PrepFailure(502, "AI_INVALID_RESPONSE")
+            raw["atomicPreferences"] = profile
         if not isinstance(raw["scheduleItems"], list) or len(raw["scheduleItems"]) > 20:
             raise PrepFailure(502, "AI_INVALID_RESPONSE")
         items = []
@@ -694,11 +829,30 @@ def _validate_interpret_result(result: Any, ApiError) -> dict[str, Any]:
             items.append({**item, "id": str(uuid.uuid4()), "contentid": None})
         raw["scheduleItems"] = items
         suggestions = validate_draft({"originalText": None, **raw})
-    except PrepFailure:
+    except (PrepFailure, ValueError, TypeError, KeyError, OverflowError):
         raise ApiError(502, "AI_INVALID_RESPONSE", "AI 응답을 처리하지 못했습니다.") from None
-    if result["needsWalkingAnswer"] != (suggestions["walking"] is None):
+    if schema_version == 1 and result["needsWalkingAnswer"] != (suggestions["walking"] is None):
         raise ApiError(502, "AI_INVALID_RESPONSE", "AI 응답을 처리하지 못했습니다.")
-    return {"suggestions": {key: suggestions[key] for key in SUGGESTION_KEYS}, "needsWalkingAnswer": result["needsWalkingAnswer"]}
+    safe_suggestions = {key: suggestions[key] for key in SUGGESTION_KEYS}
+    if schema_version == 2:
+        safe_suggestions["atomicPreferences"] = suggestions["atomicPreferences"]
+    payload = {"suggestions": safe_suggestions, "needsWalkingAnswer": result["needsWalkingAnswer"]}
+    if schema_version == 2:
+        if "analysisMeta" in result:
+            meta = result.get("analysisMeta")
+            if not isinstance(meta, dict):
+                raise ApiError(502, "AI_INVALID_RESPONSE", "AI 응답을 처리하지 못했습니다.")
+            # Diagnostics are allowlisted and contain no provider exception details.
+            safe_meta = {"provider": meta.get("provider"), "providersUsed": meta.get("providersUsed"),
+                         "degraded": meta.get("degraded"), "reviewRequired": meta.get("reviewRequired")}
+            if (safe_meta["provider"] not in {"gemini", "qwen", "ensemble"}
+                    or not isinstance(safe_meta["providersUsed"], list)
+                    or len(safe_meta["providersUsed"]) > 2
+                    or any(x not in {"gemini", "qwen"} for x in safe_meta["providersUsed"])
+                    or type(safe_meta["degraded"]) is not bool or type(safe_meta["reviewRequired"]) is not bool):
+                raise ApiError(502, "AI_INVALID_RESPONSE", "AI 응답을 처리하지 못했습니다.")
+            payload["analysisMeta"] = safe_meta
+    return payload
 
 
 def _default_interpreter(original_text: str, conditions: dict[str, Any]):
@@ -708,5 +862,15 @@ def _default_interpreter(original_text: str, conditions: dict[str, Any]):
     except Exception as exc:
         # Preserve typed provider distinctions without exposing provider details.
         if type(exc).__name__ in {"GeminiError", "GeminiUnavailableError", "GeminiTimeoutError", "GeminiInvalidResponseError"}:
+            raise
+        raise RuntimeError("AI provider unavailable") from None
+
+
+def _default_interpreter_v2(original_text: str, conditions: dict[str, Any]):
+    try:
+        from chungbuk_trip_ai import interpret_personal_draft_v2
+        return interpret_personal_draft_v2(original_text=original_text, conditions=conditions)
+    except Exception as exc:
+        if type(exc).__name__ in {"EnsembleError", "ProviderError", "GeminiError", "GeminiUnavailableError", "GeminiTimeoutError", "GeminiInvalidResponseError"}:
             raise
         raise RuntimeError("AI provider unavailable") from None
