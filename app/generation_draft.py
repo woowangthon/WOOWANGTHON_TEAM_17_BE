@@ -213,12 +213,17 @@ async def generate_candidate_draft(snapshot, normalization_result, catalog, revi
             places.append({**place, "visitPosition": position})
         days.append({"date": day["date"], "places": places})
     selection_data = selection.as_dict()
+    candidate_ranks = {item["contentid"]: index for index, item in enumerate(selection_data.get("eligible", []))}
     output = {
         "sourceFingerprint": snapshot.fingerprint, "catalogDigest": catalog.digest,
         "normalizationDigest": selection_data["normalizationDigest"],
         "policyDigest": selection_data["policyDigest"],
         "selectionDigest": hashlib.sha256(_canonical(selection_data).encode()).hexdigest(),
         "days": days, "requiresReview": True,
+        # Detached eligible pool for bounded internal optimization only. Never
+        # include member scores/source text or forward this into PlanDocument.
+        "optimizationCandidates": [{**copy.deepcopy(item), **({"selectionRank": candidate_ranks[item["contentid"]]}
+                                    if item["contentid"] in candidate_ranks else {})} for item in candidates],
         "mealCandidates": [{"contentid": c["contentid"], "allowedDates": c["allowedDates"]}
                            for c in candidates if c["planningRole"] == "meal_stop"],
         "validation": {"routeVerified": False, "timeVerified": False, "budgetVerified": False,

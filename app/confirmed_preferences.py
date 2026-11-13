@@ -92,6 +92,16 @@ def analyze_preferences(preferences: list[dict[str, Any]], supported_tags) -> di
             for tag, polarity in sorted(matches):
                 predicates.append({"memberRef": ref, "field": field, "tag": tag,
                                    "polarity": polarity, "scope": "meal" if field == "food" else "all", "required": required})
+    # Opposing ordinary likes are a tradeoff. Opposing mandatory predicates on
+    # an overlapping scope cannot be made feasible by a higher preference score.
+    hard = [p for p in predicates if p["required"]]
+    for index, a in enumerate(hard):
+        for b in hard[index + 1:]:
+            if (a["tag"] == b["tag"] and a["polarity"] != b["polarity"]
+                    and (a["scope"] == b["scope"] or "all" in {a["scope"], b["scope"]})):
+                issue = {"field": a["field"], "code": "REQUIRED_PREFERENCE_UNSATISFIED"}
+                if issue not in issues:
+                    issues.append(issue)
     doc = {"policyVersion": POLICY_VERSION, "predicates": predicates, "issues": issues}
     doc["digest"] = hashlib.sha256(_canonical(doc).encode()).hexdigest()
     return doc
@@ -118,6 +128,9 @@ def group_schedule_anchors(preferences: list[dict[str, Any]], common_settings: d
               if item.get("scope") == "group" and
               members.get(pref.get("memberRef", ""), {}).get("role") == "OWNER"]
     shared.sort(key=lambda pair: (pair[1].get("date") or "", pair[1].get("time") or "", pair[0], pair[1].get("id", "")))
+    from .preference_grounding import schedule_conflict_fields
+    if schedule_conflict_fields([item for _ref, item in shared]):
+        raise ValueError("SCHEDULE_ITEM_CLARIFICATION_REQUIRED")
     for _ref, item in shared:
         if item.get("contentid") is None or item.get("date") is None:
             continue

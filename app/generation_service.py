@@ -141,6 +141,7 @@ class GenerationService:
         by_member = {str(r["member_id"]): r for r in docs}
         tags = build_supported_tags(catalog)
         issues = set()
+        confirmed_group = []
         for member in members:
             doc = by_member.get(str(member["id"]))
             if not doc or not foundation._confirmed_doc(doc, conditions_version): continue
@@ -156,6 +157,7 @@ class GenerationService:
             if member["role"] != "OWNER" and any(item["scope"] == "group" for item in draft["scheduleItems"]):
                 issues.add("SCHEDULE_SCOPE_INVALID")
             pref = {"memberRef": "p1", **{k: draft[k] for k in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking", "scheduleItems")}}
+            confirmed_group.append({**pref, "memberRef": f"p{len(confirmed_group) + 1}"})
             if member["role"] == "OWNER":
                 try:
                     confirmed_preferences.group_schedule_anchors([pref], common_settings, {"members": [{"memberId": member["id"], "role": "OWNER"}]})
@@ -163,6 +165,8 @@ class GenerationService:
                     issues.add("SCHEDULE_ITEM_CLARIFICATION_REQUIRED")
             issues.update(item["code"] for item in confirmed_preferences.analyze_preferences([pref], tags)["issues"]
                           if item["code"].startswith("REQUIRED_"))
+        issues.update(item["code"] for item in confirmed_preferences.analyze_preferences(confirmed_group, tags)["issues"]
+                      if item["code"].startswith("REQUIRED_"))
         return sorted(issues)
 
     def _snapshot(self, conn, request, trip_id):

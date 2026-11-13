@@ -281,6 +281,14 @@ def _schedule_clarifications(conn, items: list[dict[str, Any]]) -> tuple[list[di
             clarifications.append({"itemId": item["id"], "fields": fields,
                                   "code": "SCHEDULE_ITEM_CLARIFICATION_REQUIRED",
                                   "candidates": [{"contentid": r["contentid"], "title": r["title"], "address": r["addr1"]} for r in candidates]})
+    from .preference_grounding import schedule_conflict_fields
+    by_id = {entry["itemId"]: entry for entry in clarifications}
+    for item_id, conflict_fields in schedule_conflict_fields(resolved).items():
+        if item_id in by_id:
+            by_id[item_id]["fields"] = sorted(set(by_id[item_id]["fields"]) | conflict_fields)
+        else:
+            clarifications.append({"itemId": item_id, "fields": sorted(conflict_fields),
+                                   "code": "SCHEDULE_ITEM_CLARIFICATION_REQUIRED", "candidates": []})
     return resolved, clarifications
 
 
@@ -704,7 +712,8 @@ def _validate_interpret_result(result: Any, ApiError) -> dict[str, Any]:
 def _default_interpreter(original_text: str, conditions: dict[str, Any]):
     try:
         from chungbuk_trip_ai import interpret_personal_draft
-        return interpret_personal_draft(original_text=original_text, conditions=conditions)
+        from .preference_grounding import ground_interpretation
+        return ground_interpretation(original_text, interpret_personal_draft(original_text=original_text, conditions=conditions))
     except Exception as exc:
         # Preserve typed provider distinctions without exposing provider details.
         if type(exc).__name__ in {"GeminiError", "GeminiUnavailableError", "GeminiTimeoutError", "GeminiInvalidResponseError"}:

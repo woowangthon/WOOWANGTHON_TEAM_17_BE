@@ -20,12 +20,18 @@ class RouteBudget:
         self.router = router
         self.deadline = deadline
         self.results = {}
+        self.optimization_calls = 0
+        self.optimization_call_limit = 0
 
     def route(self, origin, destination, mode):
         key = (mode, origin["latitude"], origin["longitude"], destination["latitude"], destination["longitude"])
         if key not in self.results:
             if len(self.results) >= 64 or time.monotonic() >= self.deadline:
                 return unknown_route(mode, "ROUTE_LIMIT_REACHED")
+            if self.optimization_call_limit and self.optimization_calls >= self.optimization_call_limit:
+                return unknown_route(mode, "OPTIMIZATION_ROUTE_BUDGET_REACHED")
+            if self.optimization_call_limit:
+                self.optimization_calls += 1
             self.results[key] = _route_facts(self.router, origin, destination, mode)
         return self.results[key]
 
@@ -45,7 +51,8 @@ def _meal_windows(start, end):
             if min(end, _clock(day, hi)) - max(start, _clock(day, lo)) >= timedelta(minutes=45)]
 
 
-def _fit_day(stops, *, day, start, end, origin, destination, anchors, details, roles, mode, routes, overnight, alternatives):
+def _fit_day(stops, *, day, start, end, origin, destination, anchors, details, roles, mode, routes, overnight, alternatives,
+             strict=False):
     stops = list(stops)
     meal_windows = _meal_windows(start, end)
     while stops:
@@ -124,6 +131,10 @@ def _fit_day(stops, *, day, start, end, origin, destination, anchors, details, r
             if meals < len(meal_windows):
                 warnings.add("MEAL_SLOT_UNFILLED")
             return stops, slots, warnings
+        if strict:
+            # Optimization candidates must preserve their visit set. The normal
+            # pre-optimization path may still repair a draft by dropping stops.
+            raise ScheduleWindowError()
         # Remove a flexible visit before the collision. Preserve fixed bookings and meals first.
         choices = [i for i in range(problem, -1, -1) if stops[i]["contentid"] not in anchors]
         if closed_stop and roles.get(stops[problem]["contentid"]) == "meal_stop" and problem in choices and alternatives:
@@ -137,7 +148,8 @@ def _fit_day(stops, *, day, start, end, origin, destination, anchors, details, r
     return [], {}, {"MEAL_SLOT_UNFILLED"} if meal_windows else set()
 
 
-def build_scheduled_plan(draft, catalog, conditions, preferences, settings, router, timeout_seconds=90):
+def build_scheduled_plan(draft, catalog, conditions, preferences, settings, router, timeout_seconds=90, *,
+                         optimize=True, optimization_report=None):
     from .place_catalog import _coord as catalog_coord
     deadline = time.monotonic() + timeout_seconds
     routes = RouteBudget(router, deadline)
@@ -150,6 +162,7 @@ def build_scheduled_plan(draft, catalog, conditions, preferences, settings, rout
         details[cid] = None if cid in details else detail
     departure = places.get(conditions.get("departureContentid"))
     origin = catalog_coord(departure) if departure else (settings.get("departureAnchor") or {}).get("coordinate")
+    initial_origin = origin
     anchors = {}
     for entry in settings.get("reviewedCommonFields", []):
         for a in entry.get("anchors", []):
@@ -190,4 +203,148 @@ def build_scheduled_plan(draft, catalog, conditions, preferences, settings, rout
             if slot:
                 node["plannedStartAt"], node["plannedEndAt"] = map(_iso, slot)
     plan["validation"]["warnings"] = sorted(set(plan["validation"]["warnings"]) | warnings)
+    if optimization_report is not None:
+        optimization_report.update({
+            "baselineVisitCount": sum(len(day["places"]) for day in result["days"]),
+            "finalVisitCount": sum(len(day["places"]) for day in result["days"]),
+            "baselineTravelSeconds": _verified_travel_seconds(plan),
+            "finalTravelSeconds": _verified_travel_seconds(plan),
+            "attemptedMoves": 0,
+            "acceptedMoves": 0,
+        })
+    if optimize and time.monotonic() < deadline:
+        # Each neighbor is scheduled without the legacy drop/replace repair, then
+        # independently checked with the same route budget and deadline.
+        baseline_anchor_positions = _anchor_positions(adjusted, include_lodging=False)
+        # At most six new, uncached provider routes are requested by the local
+        # search. Existing verified baseline edges remain cached and reusable.
+        routes.optimization_call_limit = 6
+
+        def evaluate(candidate_draft):
+            candidate = copy.deepcopy(candidate_draft)
+            candidate_settings = copy.deepcopy(settings)
+            # Put overnight hotels last before calculating times or routes. The
+            # arrangement helper rebinds their internal slot after cross-day
+            # allocation; hotel date and time facts remain anchored separately.
+            candidate, candidate_settings = arrange_overnight_stops(candidate, candidate_settings)
+            if not _hotel_constraints_preserved(result, adjusted, candidate, candidate_settings):
+                raise ScheduleWindowError()
+            candidate_anchors = {}
+            for entry in candidate_settings.get("reviewedCommonFields", []):
+                for anchor in entry.get("anchors", []):
+                    candidate_anchors[(anchor["date"], anchor["contentid"])] = anchor
+            for anchor in candidate_settings.get("confirmedScheduleAnchors", []):
+                candidate_anchors[(anchor["date"], anchor["contentid"])] = anchor
+            candidate_slots, candidate_warnings = {}, set()
+            candidate_origin = initial_origin
+            for day_index, section in enumerate(candidate["days"]):
+                day = section["date"]
+                window = candidate_settings["activityWindow"]
+                start = _clock(day, (conditions.get("departureTime") if day_index == 0 else None) or window["start"])
+                end = _clock(day, window["end"])
+                if start >= end:
+                    raise ScheduleWindowError()
+                day_anchors = {cid: a for (anchor_date, cid), a in candidate_anchors.items() if anchor_date == day}
+                day_overnight = {cid for cid in day_anchors if roles.get(cid) in {"overnight_camping", "overnight_lodging"}}
+                day_destination = (candidate_settings.get("returnAnchor") or {}).get("coordinate") if day_index == len(candidate["days"]) - 1 else None
+                section["places"], candidate_slots[day], day_warnings = _fit_day(
+                    section["places"], day=day, start=start, end=end, origin=candidate_origin,
+                    destination=day_destination, anchors=day_anchors, details=details, roles=roles,
+                    mode=conditions["transport"], routes=routes, overnight=day_overnight,
+                    alternatives=[], strict=True)
+                candidate_warnings.update(day_warnings)
+                last = section["places"][-1] if section["places"] else {}
+                candidate_origin = last.get("coordinate") if last.get("contentid") in day_overnight else None
+            # arrange_overnight_stops already ran above; schedule only after its
+            # hotel-last ordering and derive appointment anchors from that result.
+            if (_anchor_positions(candidate_settings, include_lodging=False) != baseline_anchor_positions
+                    or not _hotel_constraints_preserved(result, adjusted, candidate, candidate_settings)):
+                raise ScheduleWindowError()
+            checked = validate_generated_plan(candidate, catalog, conditions, preferences, candidate_settings, routes,
+                                               timeout_seconds=max(.01, deadline - time.monotonic()),
+                                               planned_slots=candidate_slots)
+            for day in checked["days"]:
+                for node in day["nodes"]:
+                    slot = candidate_slots[day["date"]].get(node.get("contentid"))
+                    if slot:
+                        node["plannedStartAt"], node["plannedEndAt"] = map(_iso, slot)
+            checked["validation"]["warnings"] = sorted(set(checked["validation"]["warnings"]) | candidate_warnings)
+            return candidate, checked, candidate_settings
+
+        try:
+            from .itinerary_optimizer import optimize_itinerary
+            candidates = draft.get("optimizationCandidates", []) if isinstance(draft, dict) else []
+            optimized, optimized_plan, optimized_settings, metrics = optimize_itinerary(
+                result, adjusted, candidates, evaluate, max_visits_per_day=8,
+                max_evaluations=24, time_budget_seconds=min(1.0, max(0.01, deadline - time.monotonic())))
+            if metrics.get("acceptedMoves", 0) > 0:
+                result, plan, adjusted = optimized, optimized_plan, optimized_settings
+            if optimization_report is not None:
+                optimization_report.update(metrics)
+        except Exception:
+            # An optimizer error never replaces the valid baseline draft.
+            if optimization_report is not None:
+                optimization_report["fallback"] = "OPTIMIZER_ERROR"
     return plan
+
+
+def _verified_travel_seconds(plan):
+    total = 0
+    for day in plan["days"]:
+        for edge in day["edges"]:
+            if edge.get("status") != "verified" or type(edge.get("durationSeconds")) is not int:
+                return None
+            total += edge["durationSeconds"]
+    return total
+
+
+def _anchor_positions(settings, *, include_lodging=True):
+    anchors = {}
+    for group in settings.get("reviewedCommonFields", []):
+        if group.get("field") == "lodging" and not include_lodging:
+            continue
+        for anchor in group.get("anchors", []):
+            if type(anchor.get("position")) is int:
+                anchors[(anchor["date"], anchor["contentid"])] = anchor["position"]
+    for anchor in settings.get("confirmedScheduleAnchors", []):
+        if anchor.get("kind") == "lodging" and not include_lodging:
+            continue
+        if type(anchor.get("position")) is int:
+            anchors[(anchor["date"], anchor["contentid"])] = anchor["position"]
+    return anchors
+
+
+def _hotel_anchor_facts(settings):
+    """Return immutable schedule facts for confirmed/shared lodging anchors."""
+    result = []
+    for group in settings.get("reviewedCommonFields", []):
+        if group.get("field") == "lodging":
+            result.extend(("reviewed", copy.deepcopy(anchor)) for anchor in group.get("anchors", []))
+    result.extend(("confirmed", copy.deepcopy(anchor)) for anchor in settings.get("confirmedScheduleAnchors", [])
+                  if anchor.get("kind") == "lodging")
+    return result
+
+
+def _hotel_constraints_preserved(baseline_draft, baseline_settings, candidate_draft, candidate_settings):
+    """Preserve each hotel's date/time/checkout and require one last stop per anchor day."""
+    before = _hotel_anchor_facts(baseline_settings)
+    after = _hotel_anchor_facts(candidate_settings)
+    if not before:
+        return not after
+
+    def immutable(items):
+        # The internal position may change when flexible visits move between
+        # days. All other source facts, including dates and checkout, are fixed.
+        return sorted((source, repr({key: value for key, value in anchor.items() if key != "position"}))
+                      for source, anchor in items)
+
+    if immutable(before) != immutable(after):
+        return False
+    for draft, settings in ((baseline_draft, baseline_settings), (candidate_draft, candidate_settings)):
+        by_day = {day["date"]: [place["contentid"] for place in day["places"]] for day in draft["days"]}
+        for _, anchor in _hotel_anchor_facts(settings):
+            stops = by_day.get(anchor.get("date"), [])
+            cid = anchor.get("contentid")
+            if not stops or stops.count(cid) != 1 or stops[-1] != cid:
+                return False
+    return True
