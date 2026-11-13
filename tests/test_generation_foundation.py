@@ -160,4 +160,4 @@ def test_snapshot_carries_only_current_atomic_group_and_member_hard_conditions()
     class StaleEngine:
         def connect(self): return StaleConnection()
     assert capture_confirmed_preparation(StaleEngine(), "trip-1", authorize).as_dict()["groupConditions"] == {
-        "conditions": [], "softSupport": [], "memberScopedConstraints": [], "conflicts": []}
+        "conditions": [], "softSupport": [], "memberScopedConstraints": [], "conflicts": [], "unresolved": []}

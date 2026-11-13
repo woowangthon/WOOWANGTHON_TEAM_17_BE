@@ -1,4 +1,5 @@
 import copy
+import json
 
 import pytest
 
@@ -183,3 +184,32 @@ def test_group_projection_flags_only_incompatible_hard_numeric_ranges():
                                          {"memberRef": "p2", "confirmed": True, "atomicPreferences": b}])
     assert projected["conflicts"] == [{"code": "INCOMPATIBLE_HARD_LIMITS", "dimension": "visit_count",
                                         "target": "방문 장소", "memberReferences": ["p1", "p2"], "needsReview": True}]
+
+
+def test_group_projection_preserves_safe_unresolved_codes_for_confirmed_current_members_only():
+    private_quote = "원문에만 있는 비공개 문장과 개인 일정"
+    unresolved = [
+        {"code": "walking_scope_ambiguous", "evidence": private_quote, "message": "내부 설명 문구"},
+        {"code": "walking_scope_ambiguous", "evidence": "다른 비공개 증거", "message": "중복 코드"},
+        {"code": "preference_uncertain", "evidence": "개인 입력", "message": "검토 필요"},
+    ]
+    source_text = EVIDENCE + " " + " ".join(item["evidence"] for item in unresolved)
+    current = build_atomic_preferences([atom()], unresolved, source_text, CONDITIONS)
+    stale = {**current, "status": "stale", "unresolved": [
+        {"code": "stale_only", "evidence": private_quote, "message": "stale"}]}
+    projected = build_group_preferences([
+        {"memberRef": "p1", "memberId": "raw-member-secret", "confirmed": True, "atomicPreferences": current},
+        {"memberRef": "p2", "memberId": "unconfirmed-secret", "confirmed": False, "atomicPreferences": current},
+        {"memberRef": "p3", "memberId": "stale-secret", "confirmed": True, "atomicPreferences": stale},
+    ])
+    assert projected["unresolved"] == [
+        {"memberRef": "p1", "code": "walking_scope_ambiguous", "needsReview": True},
+        {"memberRef": "p1", "code": "preference_uncertain", "needsReview": True},
+    ]
+    serialized = json.dumps(projected, ensure_ascii=False)
+    assert private_quote not in serialized
+    assert "내부 설명 문구" not in serialized
+    assert "raw-member-secret" not in serialized
+    assert "unconfirmed-secret" not in serialized
+    assert "stale-secret" not in serialized
+    assert all(set(item) == {"memberRef", "code", "needsReview"} for item in projected["unresolved"])

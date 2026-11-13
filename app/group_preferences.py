@@ -21,11 +21,21 @@ def build_group_preferences(members: list[dict[str, Any]]) -> dict[str, list[dic
     soft: dict[tuple[Any, ...], dict[str, Any]] = {}
     personal_hard: list[dict[str, Any]] = []
     occurrences: list[dict[str, Any]] = []
+    unresolved_handoff: list[dict[str, Any]] = []
     for member in members:
         member_ref = member.get("memberRef")
         profile = member.get("atomicPreferences")
         if member.get("confirmed") is not True or not isinstance(member_ref, str) or not isinstance(profile, dict) or profile.get("status") != "current":
             continue
+        unresolved_seen: set[str] = set()
+        for item in profile.get("unresolved", []):
+            if not isinstance(item, dict):
+                continue
+            code = item.get("code")
+            if not isinstance(code, str) or not code or code in unresolved_seen:
+                continue
+            unresolved_seen.add(code)
+            unresolved_handoff.append({"memberRef": member_ref, "code": code, "needsReview": True})
         seen: set[str] = set()
         for atom in profile.get("conditions", []):
             if not isinstance(atom, dict):
@@ -85,4 +95,5 @@ def build_group_preferences(members: list[dict[str, Any]]) -> dict[str, list[dic
                                   "memberReferences": sorted({left["memberRef"], right["memberRef"]}), "needsReview": True})
     unique_conflicts = {json.dumps(item, ensure_ascii=False, sort_keys=True): item for item in conflicts}
     return {"conditions": list(groups.values()), "softSupport": list(soft.values()),
-            "memberScopedConstraints": personal_hard, "conflicts": list(unique_conflicts.values())}
+            "memberScopedConstraints": personal_hard, "conflicts": list(unique_conflicts.values()),
+            "unresolved": unresolved_handoff}

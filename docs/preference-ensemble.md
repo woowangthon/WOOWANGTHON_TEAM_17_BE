@@ -14,7 +14,7 @@ interpret는 초안을 자동 저장하거나 확정하지 않는다. 첫 결과
 
 ## 단체 인수 경계
 
-현재 버전으로 확정된 참여자의 조건만 사용한다. 한 사람이 같은 조건을 반복해도 지지 수가 증가하지 않는다. 개인의 필수 요청·제한을 다수결로 삭제하지 않고 memberScopedConstraints에 남긴다. 단체 필수 조건, 사람별 제약, 선호 지지 수, 충돌 후보와 fingerprint를 내부 생성 캡처에 전달한다. 원문 근거와 실제 member ID는 전달하지 않는다.
+현재 버전으로 확정된 참여자의 조건만 사용한다. 한 사람이 같은 조건을 반복해도 지지 수가 증가하지 않는다. 개인의 필수 요청·제한을 다수결로 삭제하지 않고 memberScopedConstraints에 남긴다. 단체 필수 조건, 사람별 제약, 선호 지지 수, 충돌 후보, unresolved 코드와 fingerprint를 내부 생성 캡처에 전달한다. unresolved는 memberRef/code/needsReview만 보존한다. 원문 근거·메시지와 실제 member ID는 전달하지 않는다.
 
 새 원자 조건의 정확한 횟수·날짜 범위를 경로 최적화가 모두 적용하는 것은 후속 담당 범위다. 현재 후보/일정 서비스는 호환 legacy projection도 사용한다. 충돌 후보를 여행 전체의 불가능 판정으로 표현하지 않는다.
 
@@ -22,4 +22,4 @@ interpret는 초안을 자동 저장하거나 확정하지 않는다. 첫 결과
 
 BE 실행 환경에 이 기능의 AI 저장소를 editable 설치하고, 별도 서비스의 `QWEN_PREFERENCE_URL`과 서버의 Gemini key를 개인 환경변수로 설정한다. 키를 FE나 Git에 넣지 않는다. AI의 공식 기반 모델·학습 adapter·검증 manifest가 필요하다. 단순 IP나 컨테이너 ID로 학습 모델이 전달되지 않는다.
 
-이번 변경은 기존 draft_json을 사용하며 신규 DDL·migration이 없다. 비 MySQL pytest 228개, 별도 SQLite 실제 HTTP 저장·영수증·확정·stale 검사와 독립 코드 검토를 통과했다. 운영 DB는 테스트/초기화하지 않았다. Docker/WSL 장애로 전용 MySQL 통합 177개는 실행하지 않았다. UI 검수와 실제 모델 비교 결과는 AI 저장소 보고서에 따로 기록한다.
+이번 변경은 기존 draft_json을 사용하며 신규 DDL·migration이 없다. 비 MySQL pytest 229개, 별도 SQLite 실제 HTTP 저장·영수증·확정·stale 검사와 독립 코드 검토를 통과했다. 운영 DB는 테스트/초기화하지 않았다. Docker/WSL 장애로 전용 MySQL 통합 177개는 실행하지 않았다. UI 검수와 실제 모델 비교 결과는 AI 저장소 보고서에 따로 기록한다.
