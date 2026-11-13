@@ -56,6 +56,8 @@ AI 프로젝트 루트의 개인 `.env`에 `GEMINI_API_KEY`를 설정합니다. 
 
 Gemini 실제 호출과 합성 사용자 입력, 충돌 처리, 일정 최적화의 평가 절차·한계는 [AI 품질 검증](docs/ai-quality-evaluation.md)을 참고하세요. 코드 테스트 통과와 실제 사용자 만족도는 별도로 기록합니다.
 
+[2026-11-13 합성 평가 결과](docs/ai-quality-evaluation-results.md): 실제 파싱 19회와 일정 모델 호출 1회를 기록했습니다. 예약 누락과 미지원 조건, 생성 일정의 미확인 항목을 공개하며 실제 사용자 만족도는 미측정입니다.
+
 후보 장소 필터·개인별/단체 점수와 AI 날짜별 방문 초안(3·4단계)은 [후보·초안 안내](docs/candidate-draft.md)를 참고하세요. AI 패키지 0.4.0을 사용하며 실제 경로·시간 검증·저장·FE 연결은 [일정 생성 안내](docs/generation-implementation.md)를 참고하세요. migration 003은 공용 DB에 자동 적용하지 않습니다.
 
 일정 생성의 첫 두 단계인 확정 조건 캡처·읽기 전용 장소 매핑과 확정 취향 AI 구조화는 [내부 기반 안내](docs/generation-foundation.md)를 참고하세요. 새 HTTP API·후보 점수 계산·실제 일정 생성은 포함하지 않습니다.

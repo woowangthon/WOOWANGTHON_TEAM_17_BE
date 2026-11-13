@@ -1,0 +1,1872 @@
+{
+  "attemptedCalls": 19,
+  "caseCount": 15,
+  "challengeHandling": "manual review required; semantic contradiction coverage is not fully automated",
+  "challengeInputCount": 10,
+  "corpusSha256": "36c1b65850eed537b876bd6effb31d157066f0f178ae076c2feb3efcf4e94a02",
+  "createdAt": "2026-11-13T13:08:44.412796+00:00",
+  "excludedAnnotationCases": [
+    "overlapping-bookings"
+  ],
+  "excludedAnnotationCount": 1,
+  "executionMode": "live_synthetic_inputs",
+  "groundedMetrics": {
+    "appointmentCounts": {
+      "falseNegative": 9,
+      "falsePositive": 0,
+      "truePositive": 4
+    },
+    "appointmentScoredCalls": 6,
+    "attemptedCases": 19,
+    "falseNegative": 1,
+    "falsePositive": 2,
+    "lexicalRubric": "bounded aliases in app/ai_evaluation.py; partial lexical coverage, not human semantic adjudication",
+    "lexicallyScoredCalls": 7,
+    "precision": 0.8333333333333334,
+    "recall": 0.9090909090909091,
+    "truePositive": 10
+  },
+  "groupConflictAnalysis": {
+    "group-hard-conflict": {
+      "issueCodes": [
+        "REQUIRED_PREFERENCE_UNSUPPORTED"
+      ],
+      "memberCount": 2,
+      "scope": "bounded production tag detector over AI member drafts; misses unsupported/free-form semantics",
+      "status": "blocked_unsupported_required"
+    },
+    "soft-vs-hard": {
+      "issueCodes": [],
+      "memberCount": 2,
+      "scope": "bounded production tag detector over AI member drafts; misses unsupported/free-form semantics",
+      "status": "soft_hard_tradeoff_detected"
+    },
+    "user-2": {
+      "issueCodes": [
+        "REQUIRED_PREFERENCE_UNSUPPORTED"
+      ],
+      "memberCount": 2,
+      "scope": "bounded production tag detector over AI member drafts; misses unsupported/free-form semantics",
+      "status": "blocked_unsupported_required"
+    }
+  },
+  "humanEvaluation": {
+    "respondents": 0,
+    "satisfaction": null,
+    "status": "not measured"
+  },
+  "items": [
+    {
+      "caseId": "user-1",
+      "elapsedSeconds": 1.672,
+      "grounded": {
+        "appointmentCount": 1,
+        "appointmentExpected": true,
+        "appointmentExpectedCount": 1,
+        "appointmentExpectedFields": 4,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 4,
+        "appointmentMissingCount": 0,
+        "appointmentScored": true,
+        "appointmentTruePositive": 4,
+        "caseId": "user-1",
+        "expectedAtoms": [
+          "avoid:등산",
+          "likes:자연"
+        ],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "parsed",
+        "predictedAtoms": [
+          "avoid:등산",
+          "likes:자연"
+        ],
+        "truePositive": 2,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": true,
+        "walkingExpected": "20",
+        "walkingPredicted": "20",
+        "walkingStatus": "matched"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 1,
+        "appointmentExpected": true,
+        "appointmentExpectedCount": 1,
+        "appointmentExpectedFields": 4,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 4,
+        "appointmentMissingCount": 0,
+        "appointmentScored": true,
+        "appointmentTruePositive": 4,
+        "caseId": "user-1",
+        "expectedAtoms": [
+          "avoid:등산",
+          "likes:자연"
+        ],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "parsed",
+        "predictedAtoms": [
+          "avoid:등산",
+          "likes:자연"
+        ],
+        "truePositive": 2,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": true,
+        "walkingExpected": "20",
+        "walkingPredicted": "20",
+        "walkingStatus": "matched"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": false,
+        "suggestions": {
+          "avoid": "등산은 꼭 빼 주세요.",
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": "자연 풍경 위주로 보고",
+          "scheduleItems": [
+            {
+              "contentid": null,
+              "date": "2026-12-13",
+              "endDate": null,
+              "endTime": null,
+              "id": "bd6a3713-cada-440d-820b-476a2337c320",
+              "kind": "appointment",
+              "placeQuery": "청주 성안길 카페",
+              "scope": "group",
+              "time": "15:00"
+            }
+          ],
+          "walking": "20"
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": false,
+        "suggestions": {
+          "avoid": "등산은 꼭 빼 주세요.",
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": "자연 풍경 위주로 보고",
+          "scheduleItems": [
+            {
+              "contentid": null,
+              "date": "2026-12-13",
+              "endDate": null,
+              "endTime": null,
+              "id": "bd6a3713-cada-440d-820b-476a2337c320",
+              "kind": "appointment",
+              "placeQuery": "청주 성안길 카페",
+              "scope": "group",
+              "time": "15:00"
+            }
+          ],
+          "walking": "20"
+        }
+      }
+    },
+    {
+      "caseId": "user-2",
+      "elapsedSeconds": 1.547,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "user-2",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "food:맛집",
+          "food:채식"
+        ],
+        "scoringExclusion": "member_prompt_has_no_individual_lexical_gold",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "memberId": "member-1",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "user-2",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "food:맛집",
+          "food:채식"
+        ],
+        "scoringExclusion": "member_prompt_has_no_individual_lexical_gold",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": "채식 식당",
+          "foodImportance": "required",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": "채식 식당",
+          "foodImportance": "required",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "user-2",
+      "elapsedSeconds": 1.969,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "user-2",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "likes:맛집",
+          "likes:채식"
+        ],
+        "scoringExclusion": "member_prompt_has_no_individual_lexical_gold",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "memberId": "member-2",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "user-2",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "likes:맛집",
+          "likes:채식"
+        ],
+        "scoringExclusion": "member_prompt_has_no_individual_lexical_gold",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": "고기 요리를 선호하지만 채식 식당도 괜찮아요.",
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": "고기 요리를 선호하지만 채식 식당도 괜찮아요.",
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "user-2",
+      "elapsedSeconds": 1.734,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "user-2",
+        "expectedAtoms": [
+          "food:채식",
+          "likes:자연",
+          "likes:휴식"
+        ],
+        "falseNegative": 0,
+        "falsePositive": 1,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "parsed",
+        "predictedAtoms": [
+          "food:맛집",
+          "food:채식",
+          "likes:자연",
+          "likes:휴식"
+        ],
+        "truePositive": 3,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": true,
+        "walkingExpected": "40",
+        "walkingPredicted": "40",
+        "walkingStatus": "matched"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "user-2",
+        "expectedAtoms": [
+          "food:채식",
+          "likes:자연",
+          "likes:휴식"
+        ],
+        "falseNegative": 0,
+        "falsePositive": 1,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "parsed",
+        "predictedAtoms": [
+          "food:맛집",
+          "food:채식",
+          "likes:자연",
+          "likes:휴식"
+        ],
+        "truePositive": 3,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": true,
+        "walkingExpected": "40",
+        "walkingPredicted": "40",
+        "walkingStatus": "matched"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": false,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": "채식 식당, 고기 요리",
+          "foodImportance": "preferred",
+          "likes": "호수와 조용한 풍경",
+          "scheduleItems": [],
+          "walking": "40"
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": false,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": "채식 식당, 고기 요리",
+          "foodImportance": "preferred",
+          "likes": "호수와 조용한 풍경",
+          "scheduleItems": [],
+          "walking": "40"
+        }
+      }
+    },
+    {
+      "caseId": "user-3",
+      "elapsedSeconds": 1.875,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "user-3",
+        "expectedAtoms": [
+          "avoid:계단",
+          "likes:문화"
+        ],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "avoid:계단",
+          "likes:문화"
+        ],
+        "truePositive": 2,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": true,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "matched"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "user-3",
+        "expectedAtoms": [
+          "avoid:계단",
+          "likes:문화"
+        ],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "avoid:계단",
+          "likes:문화"
+        ],
+        "truePositive": 2,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": true,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "matched"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": "계단",
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": "실내 박물관과 문화 코스",
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": "계단",
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": "실내 박물관과 문화 코스",
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "user-4",
+      "elapsedSeconds": 1.781,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": 0,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": 0,
+        "appointmentScored": true,
+        "appointmentTruePositive": 0,
+        "caseId": "user-4",
+        "expectedAtoms": [
+          "food:맛집",
+          "likes:카페"
+        ],
+        "falseNegative": 1,
+        "falsePositive": 1,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "likes:맛집",
+          "likes:카페"
+        ],
+        "truePositive": 1,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": true,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "matched"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": 0,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": 0,
+        "appointmentScored": true,
+        "appointmentTruePositive": 0,
+        "caseId": "user-4",
+        "expectedAtoms": [
+          "food:맛집",
+          "likes:카페"
+        ],
+        "falseNegative": 1,
+        "falsePositive": 1,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "likes:맛집",
+          "likes:카페"
+        ],
+        "truePositive": 1,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": true,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "matched"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": "현지 맛집과 카페를 좋아해요.",
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": "현지 맛집과 카페를 좋아해요.",
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "user-5",
+      "elapsedSeconds": 1.547,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": 0,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": 0,
+        "appointmentScored": true,
+        "appointmentTruePositive": 0,
+        "caseId": "user-5",
+        "expectedAtoms": [
+          "likes:자연",
+          "likes:휴식"
+        ],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "likes:자연",
+          "likes:휴식"
+        ],
+        "truePositive": 2,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": true,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "matched"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": 0,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": 0,
+        "appointmentScored": true,
+        "appointmentTruePositive": 0,
+        "caseId": "user-5",
+        "expectedAtoms": [
+          "likes:자연",
+          "likes:휴식"
+        ],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "likes:자연",
+          "likes:휴식"
+        ],
+        "truePositive": 2,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": true,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "matched"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": "반려견과 갈 수 있는 자연 장소, 조용한 곳",
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": "반려견과 갈 수 있는 자연 장소, 조용한 곳",
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "same-user-hard-conflict",
+      "elapsedSeconds": 1.766,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "same-user-hard-conflict",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "same-user-hard-conflict",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "required",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "required",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "group-hard-conflict",
+      "elapsedSeconds": 1.734,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "group-hard-conflict",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "food:자연"
+        ],
+        "scoringExclusion": "member_prompt_has_no_individual_lexical_gold",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "memberId": "member-1",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "group-hard-conflict",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "food:자연"
+        ],
+        "scoringExclusion": "member_prompt_has_no_individual_lexical_gold",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": "자연 식단",
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": "자연 식단",
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "group-hard-conflict",
+      "elapsedSeconds": 1.516,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "group-hard-conflict",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "avoid:자연"
+        ],
+        "scoringExclusion": "member_prompt_has_no_individual_lexical_gold",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "memberId": "member-2",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "group-hard-conflict",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "avoid:자연"
+        ],
+        "scoringExclusion": "member_prompt_has_no_individual_lexical_gold",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": "자연 식단",
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": "자연 식단",
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "overlapping-bookings",
+      "elapsedSeconds": 1.781,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "overlapping-bookings",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "scoringExclusion": "invalid_v1_gold_confuses_meal_end_with_appointment_start",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "overlapping-bookings",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "scoringExclusion": "invalid_v1_gold_confuses_meal_end_with_appointment_start",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "soft-vs-hard",
+      "elapsedSeconds": 1.906,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "soft-vs-hard",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "likes:자연"
+        ],
+        "scoringExclusion": "member_prompt_has_no_individual_lexical_gold",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "memberId": "member-1",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "soft-vs-hard",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "likes:자연"
+        ],
+        "scoringExclusion": "member_prompt_has_no_individual_lexical_gold",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": "자연 풍경을 선호해요.",
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": "자연 풍경을 선호해요.",
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "soft-vs-hard",
+      "elapsedSeconds": 1.625,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "soft-vs-hard",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "avoid:자연"
+        ],
+        "scoringExclusion": "member_prompt_has_no_individual_lexical_gold",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "memberId": "member-2",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "soft-vs-hard",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [
+          "avoid:자연"
+        ],
+        "scoringExclusion": "member_prompt_has_no_individual_lexical_gold",
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": "자연 명소",
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": "자연 명소",
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "ambiguous-walk-limit",
+      "elapsedSeconds": 1.688,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "ambiguous-walk-limit",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [
+          "avoid"
+        ],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": true,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "matched"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "ambiguous-walk-limit",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [
+          "avoid"
+        ],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": true,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "matched"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": "많이 걷는 건 별로예요",
+          "avoidImportance": "preferred",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": "많이 걷는 건 별로예요",
+          "avoidImportance": "preferred",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "contradictory-walking-limits",
+      "elapsedSeconds": 48.734,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "contradictory-walking-limits",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": true,
+        "walkingExactMatch": true,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "matched"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "contradictory-walking-limits",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "parsed",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": false,
+        "walkingExactMatch": false,
+        "walkingExpected": null,
+        "walkingPredicted": "40",
+        "walkingStatus": "mismatched"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": false,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": "40"
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "wish-or-cancelled",
+      "elapsedSeconds": 1.36,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": 0,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": 0,
+        "appointmentScored": true,
+        "appointmentTruePositive": 0,
+        "caseId": "wish-or-cancelled",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": 0,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": 0,
+        "appointmentScored": true,
+        "appointmentTruePositive": 0,
+        "caseId": "wish-or-cancelled",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": true,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "missing-appointment-fields",
+      "elapsedSeconds": 1.515,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": true,
+        "appointmentExpectedCount": 1,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": 1,
+        "appointmentScored": true,
+        "appointmentTruePositive": 0,
+        "caseId": "missing-appointment-fields",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": true,
+        "appointmentExpectedCount": 1,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": 1,
+        "appointmentScored": true,
+        "appointmentTruePositive": 0,
+        "caseId": "missing-appointment-fields",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "infeasible-schedule",
+      "elapsedSeconds": 2.235,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": true,
+        "appointmentExpectedCount": 3,
+        "appointmentExpectedFields": 9,
+        "appointmentFalseNegative": 9,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": 3,
+        "appointmentScored": true,
+        "appointmentTruePositive": 0,
+        "caseId": "infeasible-schedule",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": true,
+        "appointmentExpectedCount": 3,
+        "appointmentExpectedFields": 9,
+        "appointmentFalseNegative": 9,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": 3,
+        "appointmentScored": true,
+        "appointmentTruePositive": 0,
+        "caseId": "infeasible-schedule",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    },
+    {
+      "caseId": "budget-and-unknown-facts",
+      "elapsedSeconds": 1.515,
+      "grounded": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "budget-and-unknown-facts",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "memberId": "combined",
+      "raw": {
+        "appointmentCount": 0,
+        "appointmentExpected": false,
+        "appointmentExpectedCount": null,
+        "appointmentExpectedFields": 0,
+        "appointmentFalseNegative": 0,
+        "appointmentFalsePositive": 0,
+        "appointmentHallucinatedUnknownFields": 0,
+        "appointmentMatchedFields": 0,
+        "appointmentMissingCount": null,
+        "appointmentScored": false,
+        "appointmentTruePositive": 0,
+        "caseId": "budget-and-unknown-facts",
+        "expectedAtoms": [],
+        "falseNegative": 0,
+        "falsePositive": 0,
+        "humanHandlingReview": "pending",
+        "lexicalScored": false,
+        "outcome": "walking_clarification",
+        "predictedAtoms": [],
+        "truePositive": 0,
+        "unscoredOpaqueFields": [],
+        "walkingAnswerRequiredExact": null,
+        "walkingExactMatch": null,
+        "walkingExpected": null,
+        "walkingPredicted": null,
+        "walkingStatus": "not_scored"
+      },
+      "rawSyntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      },
+      "status": "completed",
+      "syntheticInputOnlyResult": {
+        "needsWalkingAnswer": true,
+        "suggestions": {
+          "avoid": null,
+          "avoidImportance": "required",
+          "food": null,
+          "foodImportance": "preferred",
+          "likes": null,
+          "scheduleItems": [],
+          "walking": null
+        }
+      }
+    }
+  ],
+  "limitations": [
+    "Inputs are five fictional personas plus synthetic conflict cases; not a user sample.",
+    "Parser calls use this model/configuration once each; no retries.",
+    "The lexical gold rubric is deliberately narrow; human semantic adjudication is pending.",
+    "Schedule generation was not run by this command."
+  ],
+  "model": "gemini-3.5-flash-lite",
+  "modelParsingCalls": 19,
+  "postRunMethodologyCorrections": [
+    "Individual member prompts excluded from lexical aggregate: no member-specific v1 gold.",
+    "Invalid end/start booking gold excluded; original corpus and response remain unchanged.",
+    "Scorer includes the prelabelled literal vegetarian atom and distinguishes empty unknown place from invention.",
+    "Stored responses reprocessed after a walking-contradiction guard regression fix; development evaluation, not holdout."
+  ],
+  "primaryInputCount": 5,
+  "provenance": {
+    "backendDirty": false,
+    "backendHead": "e9422edc13b1dcb1d94e797378fbb4b6931e3ac0",
+    "evaluatedSourceSha256": "c84c11c702202b1372177e30cd75f8ac7f2a9642f6e3c5889c51dd6d340fdac0",
+    "pythonVersion": "3.12.10"
+  },
+  "rawMetrics": {
+    "appointmentCounts": {
+      "falseNegative": 9,
+      "falsePositive": 0,
+      "truePositive": 4
+    },
+    "appointmentScoredCalls": 6,
+    "attemptedCases": 19,
+    "falseNegative": 1,
+    "falsePositive": 2,
+    "lexicalRubric": "bounded aliases in app/ai_evaluation.py; partial lexical coverage, not human semantic adjudication",
+    "lexicallyScoredCalls": 7,
+    "precision": 0.8333333333333334,
+    "recall": 0.9090909090909091,
+    "truePositive": 10
+  },
+  "rescoreRequiresNoProviderCalls": true,
+  "responseCount": 19,
+  "sampleType": "synthetic",
+  "scoredAt": "2026-11-13T13:24:25.552321+00:00",
+  "scoringRevision": "v2-context-and-polarity-aware"
+}
