@@ -97,9 +97,9 @@ def test_unknown_route_cost_is_not_imputed_as_zero():
 def test_production_candidate_rank_takes_precedence_over_higher_group_mean():
     original = draft([1])
     pool = [
-        {"contentid": 1, "planningRole": "sightseeing_stop", "allowedDates": [DAY], "groupScore": .8, "selectionRank": 2},
+        {"contentid": 1, "planningRole": "sightseeing_stop", "allowedDates": [DAY], "groupScore": .8, "selectionRank": 1},
         {"contentid": 2, "planningRole": "sightseeing_stop", "allowedDates": [DAY], "groupScore": .4, "selectionRank": 0},
-        {"contentid": 3, "planningRole": "sightseeing_stop", "allowedDates": [DAY], "groupScore": 1., "selectionRank": 5},
+        {"contentid": 3, "planningRole": "sightseeing_stop", "allowedDates": [DAY], "groupScore": 1., "selectionRank": 2},
     ]
     result, _, _, report = optimize_itinerary(original, {}, pool, evaluator({}))
     assert [p["contentid"] for p in result["days"][0]["places"]] == [2]
@@ -215,6 +215,71 @@ def test_default_budget_does_not_starve_selection_behind_five_stop_permutations(
     assert 6 in [p["contentid"] for p in result["days"][0]["places"]]
     assert report["attemptedMoves"] <= 24
     assert report["acceptedMovesByPhase"]["candidate_replace"] >= 1
+
+
+def test_same_day_category_repeats_have_diminishing_positive_utility():
+    from app.itinerary_optimizer import _preference_score
+
+    pool = {cid: {"selectionRank": rank, "categoryKey": category, "planningRole": "sightseeing_stop"}
+            for cid, rank, category in ((1, 0, "type:1"), (2, 1, "type:1"), (3, 2, "type:2"))}
+    repeated = draft([1, 2])
+    diverse = draft([1, 3])
+    assert _preference_score(repeated, pool) == .75 + .5 / 2
+    assert _preference_score(diverse, pool) == .75 + .25
+
+
+def test_category_discount_is_per_day_unknown_is_not_a_shared_category():
+    from app.itinerary_optimizer import _preference_score
+
+    pool = {1: {"selectionRank": 0, "categoryKey": "x"},
+            2: {"selectionRank": 1, "categoryKey": "x"}}
+    across_days = {"days": [{"date": DAY, "places": [{"contentid": 1}]},
+                          {"date": "2026-12-13", "places": [{"contentid": 2}]}]}
+    assert _preference_score(across_days, pool) == 2 / 3 + 1 / 3
+    unknown = {"days": [{"date": DAY, "places": [{"contentid": 1}, {"contentid": 2}]}]}
+    assert _preference_score(unknown, {1: {"selectionRank": 0}, 2: {"selectionRank": 1}}) == 2 / 3 + 1 / 3
+
+
+def test_repeated_negative_avoid_score_does_not_gain_from_discount():
+    from app.itinerary_optimizer import _preference_score
+
+    pool = {1: {"groupScore": -.5, "categoryKey": "type:1"},
+            2: {"groupScore": -.25, "categoryKey": "type:1"}}
+    assert _preference_score(draft([1, 2]), pool) == -.75
+
+
+def test_slightly_lower_rank_different_category_can_win_after_repeat_discount():
+    original = draft([1, 2])
+    pool = [
+        {"contentid": 1, "planningRole": "sightseeing_stop", "allowedDates": [DAY], "selectionRank": 0, "categoryKey": "type:a"},
+        {"contentid": 2, "planningRole": "sightseeing_stop", "allowedDates": [DAY], "selectionRank": 1, "categoryKey": "type:a"},
+        {"contentid": 3, "planningRole": "culture_stop", "allowedDates": [DAY], "selectionRank": 2, "categoryKey": "type:b"},
+        {"contentid": 4, "planningRole": "activity_stop", "allowedDates": [DAY], "selectionRank": 3, "categoryKey": "type:c"},
+    ]
+    result, _, _, report = optimize_itinerary(original, {}, pool, evaluator({}))
+    ids = [p["contentid"] for p in result["days"][0]["places"]]
+    assert ids == [1, 3]
+    assert report["finalAdjustedUtility"] > report["baselineAdjustedUtility"]
+    assert report["finalCategoryRepetitions"] == 0
+
+
+def test_candidate_pool_role_anchors_protect_meals_appointments_and_lodging():
+    original = draft([1, 2, 3, 4])
+    original["days"][0]["places"][2]["planningRole"] = "meal_stop"
+    original["days"][0]["places"][3]["planningRole"] = "overnight_lodging"
+    settings = {"confirmedScheduleAnchors": [{"date": DAY, "contentid": 1, "position": 0, "kind": "appointment"},
+                                               {"date": DAY, "contentid": 3, "position": 2, "kind": "meal"},
+                                               {"date": DAY, "contentid": 4, "position": 3, "kind": "lodging"}]}
+    pool = [{"contentid": n, "planningRole": role, "allowedDates": [DAY], "groupScore": score,
+             "categoryKey": f"type:{n}"}
+            for n, role, score in [(1, "sightseeing_stop", 0), (2, "sightseeing_stop", 0),
+                                   (3, "meal_stop", 0), (4, "overnight_lodging", 0),
+                                   (5, "activity_stop", 100), (6, "meal_stop", 100)]]
+    result, _, _, _ = optimize_itinerary(original, settings, pool, evaluator({}))
+    ids = [p["contentid"] for p in result["days"][0]["places"]]
+    assert ids[0] == 1
+    assert ids[2:] == [3, 4]
+    assert 6 not in ids
 
 
 def test_two_day_reallocation_keeps_hotel_last_and_preserves_checkout_anchor():

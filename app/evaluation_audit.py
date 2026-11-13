@@ -10,6 +10,8 @@ from collections import Counter
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
+from .generation_policy import CAR_LEG_MAX_SECONDS
+
 KST = timezone(timedelta(hours=9))
 
 
@@ -219,11 +221,16 @@ def audit_synthetic_plan(
                 a, b = _fixture_index(previous, places), _fixture_index(node, places)
                 prev_end = _datetime(previous.get("plannedEndAt") or previous.get("estimatedEndAt"))
                 next_start = _datetime(node.get("plannedStartAt") or node.get("estimatedStartAt"))
-                if a is None or b is None or prev_end is None or next_start is None:
+                if a is None or b is None:
                     unsure("SYNTHETIC_TRANSFER_FACT_UNKNOWN", day)
                 else:
                     transfer = _transfer_minutes(a, b)
-                    if next_start < prev_end + timedelta(minutes=transfer):
+                    if (conditions.get("transport") == "car" and previous.get("kind") == "PLACE"
+                            and node.get("kind") == "PLACE" and transfer * 60 > CAR_LEG_MAX_SECONDS):
+                        fail("CAR_LEG_TIME_LIMIT_EXCEEDED", day, cid if type(cid) is int else None)
+                    if prev_end is None or next_start is None:
+                        unsure("SYNTHETIC_TRANSFER_FACT_UNKNOWN", day)
+                    elif next_start < prev_end + timedelta(minutes=transfer):
                         fail("SYNTHETIC_TRANSFER_TIME_EXCEEDED", day, cid if type(cid) is int else None)
                     if conditions.get("transport") == "walk":
                         walk_limits = [int(p["walking"]) for p in preferences

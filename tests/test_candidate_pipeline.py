@@ -94,6 +94,10 @@ def test_full_candidate_pipeline_with_real_sdk_and_fake_https(pipeline, monkeypa
     wire = json.dumps(observed, ensure_ascii=False)
     assert "memberRef" not in wire and "evidence" not in wire and "originalText" not in wire
     assert "sourceFingerprint" not in wire and "memberScores" not in wire
+    assert "categoryKey" not in wire
+    assert all(item["categoryKey"] == "planningRole:sightseeing" for item in result["optimizationCandidates"])
+    assert all("contenttypeid" not in item and "contentTypeName" not in item
+               for item in result["optimizationCandidates"])
 
 
 def test_review_bound_to_previous_catalog_or_unreviewed_source_is_not_adopted(pipeline):

@@ -16,18 +16,18 @@ class TripCatalog:
         return {"contentid": cid, "title": str(cid), "coordinate": {**COORD, "longitude": 127 + cid / 1000}}
 
 
-def schedule(catalog, dates, anchors=(), end="20:00", departure_coord=COORD):
+def schedule(catalog, dates, anchors=(), end="20:00", departure_coord=COORD, seconds=3600):
     draft = {"days": [{"date": f"2026-12-{12+i}", "places": [catalog.presentation_place(cid) for cid in ids]}
                       for i, ids in enumerate(dates)]}
     settings = {"activityWindow": {"start": "09:00", "end": end}, "confirmedScheduleAnchors": list(anchors),
                 "departureAnchor": {"label": "출발", "coordinate": departure_coord}, "reviewedCommonFields": []}
     return build_scheduled_plan(draft, catalog, {"transport": "car", "expectedPeople": 2, "budget": 1000000},
-                                [], settings, Router(seconds=3600))
+                                [], settings, Router(seconds=seconds))
 
 
 def test_two_days_fit_transfers_stays_and_real_meals_without_hotel():
     catalog = TripCatalog({1: 150, 2: 150, 3: 60, 4: 180, 5: 60, 6: 90, 7: 60, 8: 60}, meals={3, 5, 7, 8})
-    result = schedule(catalog, [[1, 2, 3, 4, 5], [6, 7, 8]])
+    result = schedule(catalog, [[1, 2, 3, 4, 5], [6, 7, 8]], seconds=1200)
     kst = timezone(timedelta(hours=9))
     days = [[n for n in day["nodes"] if n["kind"] == "PLACE"] for day in result["days"]]
     assert len(days[0]) < 5
@@ -39,7 +39,7 @@ def test_two_days_fit_transfers_stays_and_real_meals_without_hotel():
             assert finish - start == timedelta(minutes=node["stayMinutes"])
             assert 9 <= start.hour and (finish.hour, finish.minute) <= (20, 0)
             if prev:
-                assert start - prev >= timedelta(hours=1)
+                assert start - prev >= timedelta(minutes=20)
             prev = finish
     assert "OVERNIGHT_LOCATION_UNRESOLVED" in result["validation"]["warnings"]
     assert "MEAL_DURATION_UNKNOWN" not in result["validation"]["warnings"]

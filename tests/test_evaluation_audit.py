@@ -106,3 +106,15 @@ def test_meal_merely_overlapping_window_is_not_full_slot_compliance():
     nodes = [_node("PLACE", "10:00", "12:00", 1)]
     result = _audit(_plan(nodes), catalog=_catalog(role="meal_stop"))
     assert "MEAL_OUTSIDE_SYNTHETIC_SLOT" in result["knownViolationCounts"]
+
+
+def test_independent_car_cap_applies_to_place_legs_even_with_unknown_clocks(monkeypatch):
+    import app.evaluation_audit as module
+    a, b = _catalog(1), _catalog(2)
+    catalog = SimpleNamespace(places=a.places + b.places, details=a.details + b.details)
+    monkeypatch.setattr(module, "_transfer_minutes", lambda _a, _b: 41)
+    nodes = [{"kind": "START", "coordinate": {"longitude": 127.0}}, {"kind": "PLACE", "contentid": 1},
+             {"kind": "PLACE", "contentid": 2}, {"kind": "END", "coordinate": {"longitude": 127.0}}]
+    result = _audit(_plan(nodes), catalog=catalog, candidates=[{"contentid": i, "allowedDates": [DAY]} for i in (1, 2)])
+    assert result["knownViolationCounts"]["CAR_LEG_TIME_LIMIT_EXCEEDED"] == 1
+    assert "SYNTHETIC_TRANSFER_FACT_UNKNOWN" in result["unknownCounts"]

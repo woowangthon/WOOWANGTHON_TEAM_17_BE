@@ -12,6 +12,11 @@ import time
 from collections import Counter, deque
 from typing import Any, Callable
 
+from .generation_policy import GENERATION_POLICY_VERSION
+
+
+_FLEXIBLE_ROLES = {"sightseeing_stop", "culture_stop", "activity_stop", "shopping_stop", "date_specific_event"}
+
 
 def _visit_ids(draft: dict[str, Any]) -> tuple[tuple[str, tuple[int, ...]], ...]:
     return tuple((day["date"], tuple(place["contentid"] for place in day["places"])) for day in draft["days"])
@@ -35,20 +40,79 @@ def _travel_seconds(plan: dict[str, Any]) -> int | None:
     return seconds
 
 
-def _preference_score(draft: dict[str, Any], candidates: dict[int, dict[str, Any]]) -> float:
-    visited = [candidates.get(p["contentid"], {}) for day in draft["days"] for p in day["places"]]
-    if visited and all(type(row.get("selectionRank")) is int and row["selectionRank"] >= 0 for row in visited):
-        # CandidateSelection orders by minimum member score, then group mean.
-        # A lower rank is better; preserving that order avoids trading fairness
-        # for a higher mean score among a subset of group members.
-        return -float(sum(row["selectionRank"] for row in visited))
-    return sum(float(row.get("groupScore", 0.0)) for row in visited)
+def _base_utility(row: dict[str, Any], rank_count: int | None) -> float:
+    rank = row.get("selectionRank")
+    if rank_count is not None and type(rank) is int and 0 <= rank < rank_count:
+        return (rank_count - rank) / (rank_count + 1)
+    try:
+        score = float(row.get("groupScore", 0.0))
+        return score if score == score and abs(score) != float("inf") else 0.0
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
 
 
-def _rank(draft: dict[str, Any], plan: dict[str, Any], candidates: dict[int, dict[str, Any]]):
+def _rank_count(candidates: dict[int, dict[str, Any]]) -> int | None:
+    ranks = [row.get("selectionRank") for row in candidates.values()]
+    if ranks and all(type(rank) is int and rank >= 0 for rank in ranks):
+        # CandidateSelection ranks can contain gaps after a detached subset is
+        # formed; max+1 keeps their original ordering and positive normalization.
+        return max(ranks) + 1
+    return None
+
+
+def _preference_score(draft: dict[str, Any], candidates: dict[int, dict[str, Any]],
+                      anchors: set[tuple[str, int]] | None = None) -> float:
+    """Same-day category utility with a 1/k marginal discount for repeats."""
+    rank_count = _rank_count(candidates)
+    anchors = anchors or set()
+    score = 0.0
+    for day in draft["days"]:
+        groups: dict[str, list[float]] = {}
+        for place in day["places"]:
+            row = candidates.get(place["contentid"], {})
+            role = row.get("planningRole", place.get("planningRole"))
+            utility = _base_utility(row, rank_count)
+            category = row.get("categoryKey")
+            if ((day["date"], place["contentid"]) in anchors
+                    or role in {"overnight_lodging", "overnight_camping"}
+                    or not isinstance(category, str) or not category):
+                score += utility
+                continue
+            groups.setdefault(category, []).append(utility)
+        for values in groups.values():
+            positives = sorted((value for value in values if value > 0), reverse=True)
+            score += sum(value / (index + 1) for index, value in enumerate(positives))
+            # Negative fallback scores represent avoids. Repetition must never
+            # make them less negative or turn an avoided category into a gain.
+            score += sum(value for value in values if value <= 0)
+    return score
+
+
+def _category_repetitions(draft: dict[str, Any], candidates: dict[int, dict[str, Any]],
+                          anchors: set[tuple[str, int]] | None = None) -> int:
+    anchors = anchors or set()
+    count = 0
+    for day in draft["days"]:
+        seen: set[str] = set()
+        for place in day["places"]:
+            if (day["date"], place["contentid"]) in anchors:
+                continue
+            row = candidates.get(place["contentid"], {})
+            if row.get("planningRole", place.get("planningRole")) in {"overnight_lodging", "overnight_camping"}:
+                continue
+            key = row.get("categoryKey")
+            if isinstance(key, str) and key:
+                if key in seen:
+                    count += 1
+                seen.add(key)
+    return count
+
+
+def _rank(draft: dict[str, Any], plan: dict[str, Any], candidates: dict[int, dict[str, Any]],
+          anchors: set[tuple[str, int]] | None = None):
     travel = _travel_seconds(plan)
     # Unknown routes are never assigned a zero cost or treated as an improvement.
-    return (sum(_violations(plan).values()), -_preference_score(draft, candidates),
+    return (sum(_violations(plan).values()), -_preference_score(draft, candidates, anchors),
             travel if travel is not None else float("inf"))
 
 
@@ -145,6 +209,10 @@ def _phase_neighbors(current: dict[str, Any], pool: dict[int, dict[str, Any]], a
             if (date, cid) in anchors:
                 continue
             candidate = pool.get(cid)
+            if (candidate or stop).get("planningRole") in {"meal_stop", "overnight_lodging", "overnight_camping"}:
+                # Meals and overnight stays keep their original day; changing
+                # their date can hide a lost meal behind an existing warning.
+                continue
             allowed = set(candidate.get("allowedDates", dates)) if candidate else set(dates)
             for target_index, target in enumerate(current["days"]):
                 if target_index == day_index or target["date"] not in allowed or len(target["places"]) >= max_visits_per_day:
@@ -153,8 +221,8 @@ def _phase_neighbors(current: dict[str, Any], pool: dict[int, dict[str, Any]], a
                 moved = changed["days"][day_index]["places"].pop(source)
                 changed["days"][target_index]["places"].append(moved)
                 yield "date_reallocation", changed
-        # Only replace with an unused, date-eligible candidate of the same role
-        # whose precomputed selection score is strictly higher.
+        # Replace flexible tourism roles only. Role and hard feasibility checks
+        # remain with the whole-plan evaluator; adjusted utility decides gains.
         if phase == "candidate_replace" and pool and places:
             for source, stop in enumerate(places):
                 cid = stop["contentid"]
@@ -163,19 +231,19 @@ def _phase_neighbors(current: dict[str, Any], pool: dict[int, dict[str, Any]], a
                 old = pool.get(cid)
                 if old is None:
                     continue
+                old_role = old.get("planningRole")
+                if old_role not in _FLEXIBLE_ROLES | {"meal_stop"}:
+                    continue
                 for replacement, info in pool.items():
                     if replacement in used or date not in info.get("allowedDates", dates):
                         continue
-                    if info.get("planningRole") != old.get("planningRole"):
-                        continue
-                    if type(info.get("selectionRank")) is int and type(old.get("selectionRank")) is int:
-                        if info["selectionRank"] >= old["selectionRank"]:
-                            continue
-                    elif float(info.get("groupScore", 0)) <= float(old.get("groupScore", 0)):
+                    new_role = info.get("planningRole")
+                    if not ((old_role in _FLEXIBLE_ROLES and new_role in _FLEXIBLE_ROLES)
+                            or (old_role == new_role == "meal_stop")):
                         continue
                     changed = copy.deepcopy(current)
                     changed["days"][day_index]["places"][source] = {
-                        **{k: v for k, v in info.items() if k in {"contentid", "title", "planningRole", "adminCity", "coordinate", "estimatedStayMinutes"}},
+                        **{k: v for k, v in info.items() if k in {"contentid", "title", "planningRole", "adminCity", "coordinate", "estimatedStayMinutes", "categoryKey"}},
                         "visitPosition": source,
                     }
                     yield "candidate_replace", changed
@@ -218,11 +286,13 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
     initial_violations = _violations(baseline_plan)
     initial_risks = _risk_counts(baseline_plan)
     current_draft, current_plan, current_settings = baseline_scheduled, baseline_plan, baseline_settings
-    current_rank = _rank(current_draft, current_plan, pool)
     # The caller's captured anchors are the authority; evaluator output may
     # intentionally omit settings when used by a local/offline score harness.
     anchors = _anchored_positions(settings)
+    anchor_ids = set(anchors)
+    current_rank = _rank(current_draft, current_plan, pool, anchor_ids)
     attempted = accepted = 0
+    utility_screened = 0
     attempted_by_phase = Counter()
     accepted_by_phase = Counter()
     deadline = time.monotonic() + max(0.01, min(time_budget_seconds, 1.0))
@@ -242,6 +312,15 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
         if not _valid_candidate(neighbor, sum(len(day["places"]) for day in current_draft["days"]),
                                 pool, max_visits_per_day, ids):
             continue
+        # With no hard violation to repair, a lower-utility neighbor cannot win
+        # the lexicographic objective even with a shorter route. Do not spend
+        # the six-route budget on it before reaching useful diversity moves.
+        # This check is outside the lazy generator so the wall-clock deadline
+        # still applies to every screened candidate.
+        if (not _violations(current_plan)
+                and _preference_score(neighbor, pool, anchor_ids) < _preference_score(current_draft, pool, anchor_ids)):
+            utility_screened += 1
+            continue
         attempted += 1
         attempted_by_phase[phase] += 1
         try:
@@ -258,7 +337,7 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
                 or violations - initial_violations or violations - current_violations
                 or risks - initial_risks or risks - current_risks):
             continue
-        new_rank = _rank(scheduled, plan, pool)
+        new_rank = _rank(scheduled, plan, pool, anchor_ids)
         if new_rank < current_rank:
             current_draft, current_plan, current_settings = scheduled, plan, adjusted
             current_rank = new_rank
@@ -271,10 +350,16 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
         "finalVisitCount": sum(len(day["places"]) for day in current_draft["days"]),
         "baselineTravelSeconds": _travel_seconds(baseline_plan),
         "finalTravelSeconds": _travel_seconds(current_plan),
-        "baselinePreferenceScore": _preference_score(baseline_scheduled, pool),
-        "finalPreferenceScore": _preference_score(current_draft, pool),
+        "baselinePreferenceScore": _preference_score(baseline_scheduled, pool, anchor_ids),
+        "finalPreferenceScore": _preference_score(current_draft, pool, anchor_ids),
+        "baselineAdjustedUtility": _preference_score(baseline_scheduled, pool, anchor_ids),
+        "finalAdjustedUtility": _preference_score(current_draft, pool, anchor_ids),
+        "baselineCategoryRepetitions": _category_repetitions(baseline_scheduled, pool, anchor_ids),
+        "finalCategoryRepetitions": _category_repetitions(current_draft, pool, anchor_ids),
+        "policyVersion": GENERATION_POLICY_VERSION,
         "attemptedMoves": attempted,
         "acceptedMoves": accepted,
+        "utilityScreenedMoves": utility_screened,
         "attemptedMovesByPhase": dict(attempted_by_phase),
         "acceptedMovesByPhase": dict(accepted_by_phase),
         "method": "bounded-2opt-relocate-toptw-inspired",

@@ -18,7 +18,7 @@ from typing import Any, Callable
 from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
 
-from . import confirmed_preferences, generation_foundation as foundation, generation_reviews, place_catalog, preparation
+from . import confirmed_preferences, generation_foundation as foundation, generation_reviews, place_catalog, preparation, generation_policy
 
 
 class ServiceError(Exception):
@@ -129,7 +129,8 @@ class GenerationService:
                                  "confirmedPreferenceVersion": int(d["confirmed_preference_version"]),
                                  "sourceDocumentDigest": source_document_digest, "scheduleReady": schedule_ready,
                                  "requiredReady": required_ready})
-        stamp = {"policyVersion": confirmed_preferences.POLICY_VERSION, "conditionsVersion": cv,
+        stamp = {"policyVersion": confirmed_preferences.POLICY_VERSION,
+                 "generationPolicyVersion": generation_policy.GENERATION_POLICY_VERSION, "conditionsVersion": cv,
                  "members": personal, "settingsVersion": settings_version, "catalogDigest": catalog_digest}
         return hashlib.sha256(_canonical(stamp).encode()).hexdigest(), statuses, personal
 

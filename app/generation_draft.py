@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from typing import Any, Callable
 
 from .candidate_selection import build_candidate_selection, build_confirmed_candidate_selection
+from .generation_policy import category_key
 
 
 class GenerationDraftError(Exception):
@@ -214,6 +215,20 @@ async def generate_candidate_draft(snapshot, normalization_result, catalog, revi
         days.append({"date": day["date"], "places": places})
     selection_data = selection.as_dict()
     candidate_ranks = {item["contentid"]: index for index, item in enumerate(selection_data.get("eligible", []))}
+    catalog_places = {row["contentid"]: row for row in getattr(catalog, "places", ())
+                      if isinstance(row, dict) and type(row.get("contentid")) is int}
+    catalog_tags = {row["contentid"]: {tag.strip() for field in ("preferenceTags", "vibeTags")
+                                      for tag in (row.get(field, "").split("|") if isinstance(row.get(field), str) else [])}
+                    for row in getattr(catalog, "preferences", ()) if isinstance(row, dict) and type(row.get("contentid")) is int}
+    internal_optimization_candidates = []
+    for item in candidates:
+        source = catalog_places.get(item["contentid"], {})
+        category = category_key({**source, "planningRole": item.get("planningRole"),
+                                 "matchedTags": list(catalog_tags.get(item["contentid"], set()))})
+        internal_optimization_candidates.append({**copy.deepcopy(item),
+                                                  **({"selectionRank": candidate_ranks[item["contentid"]]}
+                                                     if item["contentid"] in candidate_ranks else {}),
+                                                  **({"categoryKey": category} if category is not None else {})})
     output = {
         "sourceFingerprint": snapshot.fingerprint, "catalogDigest": catalog.digest,
         "normalizationDigest": selection_data["normalizationDigest"],
@@ -222,8 +237,7 @@ async def generate_candidate_draft(snapshot, normalization_result, catalog, revi
         "days": days, "requiresReview": True,
         # Detached eligible pool for bounded internal optimization only. Never
         # include member scores/source text or forward this into PlanDocument.
-        "optimizationCandidates": [{**copy.deepcopy(item), **({"selectionRank": candidate_ranks[item["contentid"]]}
-                                    if item["contentid"] in candidate_ranks else {})} for item in candidates],
+        "optimizationCandidates": internal_optimization_candidates,
         "mealCandidates": [{"contentid": c["contentid"], "allowedDates": c["allowedDates"]}
                            for c in candidates if c["planningRole"] == "meal_stop"],
         "validation": {"routeVerified": False, "timeVerified": False, "budgetVerified": False,

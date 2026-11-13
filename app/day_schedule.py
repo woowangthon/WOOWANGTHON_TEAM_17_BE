@@ -6,6 +6,7 @@ import time
 from datetime import timedelta
 
 from .confirmed_schedule import arrange_overnight_stops
+from .generation_policy import car_leg_exceeds_limit
 from .plan_validation import _clock, _iso, _opening, _route_facts, is_late_booking, validate_generated_plan
 from .routing import _coord, unknown_route
 
@@ -52,17 +53,27 @@ def _meal_windows(start, end):
 
 
 def _fit_day(stops, *, day, start, end, origin, destination, anchors, details, roles, mode, routes, overnight, alternatives,
-             strict=False):
+             strict=False, origin_is_place=False):
     stops = list(stops)
     meal_windows = _meal_windows(start, end)
     while stops:
         now, earliest, previous, meals = start, start, origin, 0
+        previous_is_place = origin_is_place
         slots, warnings = {}, set()
         problem = None
         closed_stop = False
+        car_limit_problem = False
         for index, place in enumerate(stops):
             cid = place["contentid"]
             anchor = anchors.get(cid, {})
+            if _coord(previous) and _coord(place.get("coordinate")):
+                route = routes.route(previous, place["coordinate"], mode)
+                if route.get("status") == "verified" and car_leg_exceeds_limit(
+                        mode, route.get("durationSeconds"), from_kind="PLACE" if previous_is_place else "START",
+                        to_kind="PLACE"):
+                    problem = index
+                    car_limit_problem = True
+                    break
             minutes, known = routes.travel_minutes(previous, place.get("coordinate"), mode)
             if not known:
                 warnings.add("TRANSFER_TIME_ESTIMATED")
@@ -120,7 +131,7 @@ def _fit_day(stops, *, day, start, end, origin, destination, anchors, details, r
             if cid not in overnight and _opening(detail, now, finish) == "violated":
                 problem, closed_stop = index, True
                 break
-            now, previous = finish, place.get("coordinate")
+            now, previous, previous_is_place = finish, place.get("coordinate"), True
         if problem is None and destination is not None:
             minutes, known = routes.travel_minutes(previous, destination, mode)
             if not known:
@@ -136,7 +147,8 @@ def _fit_day(stops, *, day, start, end, origin, destination, anchors, details, r
             # pre-optimization path may still repair a draft by dropping stops.
             raise ScheduleWindowError()
         # Remove a flexible visit before the collision. Preserve fixed bookings and meals first.
-        choices = [i for i in range(problem, -1, -1) if stops[i]["contentid"] not in anchors]
+        choices = [i for i in range(problem, -1, -1) if stops[i]["contentid"] not in anchors
+                   and (not car_limit_problem or roles.get(stops[i]["contentid"]) != "meal_stop")]
         if closed_stop and roles.get(stops[problem]["contentid"]) == "meal_stop" and problem in choices and alternatives:
             # These incoming IDs already passed the same date, region and hard preference filters.
             stops[problem] = alternatives.pop(0)
@@ -189,7 +201,7 @@ def build_scheduled_plan(draft, catalog, conditions, preferences, settings, rout
         section["places"], slots[day], day_warnings = _fit_day(
             section["places"], day=day, start=start, end=end, origin=origin, destination=destination,
             anchors=day_anchors, details=details, roles=roles, mode=conditions["transport"], routes=routes, overnight=overnight,
-            alternatives=alternatives)
+            alternatives=alternatives, origin_is_place=index > 0 and origin is not None)
         used.update(p["contentid"] for p in section["places"])
         warnings.update(day_warnings)
         last = section["places"][-1] if section["places"] else {}
@@ -251,7 +263,8 @@ def build_scheduled_plan(draft, catalog, conditions, preferences, settings, rout
                     section["places"], day=day, start=start, end=end, origin=candidate_origin,
                     destination=day_destination, anchors=day_anchors, details=details, roles=roles,
                     mode=conditions["transport"], routes=routes, overnight=day_overnight,
-                    alternatives=[], strict=True)
+                    alternatives=[], strict=True,
+                    origin_is_place=day_index > 0 and candidate_origin is not None)
                 candidate_warnings.update(day_warnings)
                 last = section["places"][-1] if section["places"] else {}
                 candidate_origin = last.get("coordinate") if last.get("contentid") in day_overnight else None
