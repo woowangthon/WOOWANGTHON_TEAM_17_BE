@@ -1,0 +1,452 @@
+[
+  {
+    "id": "long_walk_korean",
+    "draft": {
+      "originalText": "오래 걷는것은 싫어요",
+      "avoid": "오래 걷는것은 싫어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": null,
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "long_walk_selected_40",
+    "draft": {
+      "originalText": "오래 걷는 것은 싫어요",
+      "avoid": "오래 걷는 것은 싫어요",
+      "avoidImportance": "required",
+      "walking": "40"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": null,
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "long_walk_missing",
+    "draft": {
+      "originalText": "오래 걷는 것은 싫어요",
+      "avoid": "오래 걷는 것은 싫어요",
+      "avoidImportance": "required",
+      "walking": null
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": "missing",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "long_walk_unlimited",
+    "draft": {
+      "originalText": "오래 걷는 것은 싫어요",
+      "avoid": "오래 걷는 것은 싫어요",
+      "avoidImportance": "required",
+      "walking": "unlimited"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": "unlimited",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "long_walk_preferred_unlimited",
+    "draft": {
+      "originalText": "오래 걷는 것은 싫어요",
+      "avoid": "오래 걷는 것은 싫어요",
+      "avoidImportance": "preferred",
+      "walking": "unlimited"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": null,
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "source_20_choice_40_conflict",
+    "draft": {
+      "originalText": "도보 구간은 최대 20분 이내로 해 주세요. 오래 걷는 건 싫어요.",
+      "avoid": "오래 걷는 건 싫어요",
+      "avoidImportance": "required",
+      "walking": "40"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": "conflict",
+      "sourceMaxMinutes": 20
+    }
+  },
+  {
+    "id": "source_20_choice_20_ok",
+    "draft": {
+      "originalText": "도보 구간은 최대 20분 이내로 해 주세요. 오래 걷는 건 싫어요.",
+      "avoid": "오래 걷는 건 싫어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": null,
+      "sourceMaxMinutes": 20
+    }
+  },
+  {
+    "id": "source_40_choice_20_stricter",
+    "draft": {
+      "originalText": "한 번에 최대 40분 도보 이동은 괜찮아요. 긴 도보 이동은 싫어요.",
+      "avoid": "긴 도보 이동은 싫어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": null,
+      "sourceMaxMinutes": 40
+    }
+  },
+  {
+    "id": "long_walk_with_stairs",
+    "draft": {
+      "originalText": "오래 걷는 것과 계단은 싫어요.",
+      "avoid": "오래 걷는 것과 계단은 싫어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": false,
+      "remainingAvoid": "오래 걷는 것과 계단은 싫어요",
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "long_walk_with_hiking",
+    "draft": {
+      "originalText": "긴 도보 이동과 등산은 피하고 싶어요.",
+      "avoid": "긴 도보 이동과 등산은 피하고 싶어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": false,
+      "remainingAvoid": "긴 도보 이동과 등산은 피하고 싶어요",
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "long_walk_with_accessibility",
+    "draft": {
+      "originalText": "오래 걷는 코스는 싫고 휠체어 접근성이 필요해요.",
+      "avoid": "오래 걷는 코스는 싫고 휠체어 접근성이 필요해요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": false,
+      "remainingAvoid": "오래 걷는 코스는 싫고 휠체어 접근성이 필요해요",
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "separate_stairs_remainder",
+    "draft": {
+      "originalText": "오래 걷는 것과 계단은 싫어요.",
+      "avoid": "오래 걷는 것 싫어요, 계단 싫어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": "계단 싫어요",
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "daily_total_scope",
+    "draft": {
+      "originalText": "하루 총 걷는 시간이 길면 싫어요.",
+      "avoid": "하루 총 걷는 시간이 길면 싫어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": false,
+      "remainingAvoid": "하루 총 걷는 시간이 길면 싫어요",
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "original_daily_total_with_vague_avoid",
+    "draft": {
+      "originalText": "하루 총 도보 시간은 20분 이하로 해 주세요.",
+      "avoid": "긴 도보 이동",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "original_stairs_with_vague_avoid",
+    "draft": {
+      "originalText": "계단이 있는 장소는 싫고 오래 걷는 것도 싫어요.",
+      "avoid": "오래 걷는 것도 싫어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "distance_scope",
+    "draft": {
+      "originalText": "도보 거리가 3km를 넘으면 싫어요.",
+      "avoid": "도보 거리가 3km를 넘으면 싫어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": false,
+      "remainingAvoid": "도보 거리가 3km를 넘으면 싫어요",
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "absolute_no_walking",
+    "draft": {
+      "originalText": "아예 걷지 않는 일정으로 해 주세요.",
+      "avoid": "아예 걷지 않는 일정으로 해 주세요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": false,
+      "remainingAvoid": "아예 걷지 않는 일정으로 해 주세요",
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "unrepresentable_15_minute_bound",
+    "draft": {
+      "originalText": "도보 한 번에 최대 15분을 넘지 않게 해 주세요. 오래 걷기는 싫어요.",
+      "avoid": "오래 걷기는 싫어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": "conflict",
+      "sourceMaxMinutes": 15
+    }
+  },
+  {
+    "id": "negated_preference",
+    "draft": {
+      "originalText": "오래 걷는 게 싫지 않아요.",
+      "avoid": "오래 걷는 게 싫지 않아요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": false,
+      "remainingAvoid": "오래 걷는 게 싫지 않아요",
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "question_phrase",
+    "draft": {
+      "originalText": "오래 걷는 것은 싫어요?",
+      "avoid": "오래 걷는 것은 싫어요?",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": false,
+      "remainingAvoid": "오래 걷는 것은 싫어요?",
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "other_avoid_preserved",
+    "draft": {
+      "originalText": "오래 걷는 것은 싫고 쇼핑은 피하고 싶어요.",
+      "avoid": "오래 걷는 것은 싫어요, 쇼핑은 피하고 싶어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": "쇼핑은 피하고 싶어요",
+      "issue": null,
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "selected_value_unrepresentable",
+    "draft": {
+      "originalText": "오래 걷는 것은 싫어요",
+      "avoid": "오래 걷는 것은 싫어요",
+      "avoidImportance": "required",
+      "walking": "15"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": "missing",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "terse_long_walk_label",
+    "draft": {
+      "originalText": "긴 도보 이동",
+      "avoid": "긴 도보 이동",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": null,
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "mixed_walking_shopping_same_clause",
+    "draft": {
+      "originalText": "오래 걷기는 싫고 쇼핑은 피하고 싶어요.",
+      "avoid": "오래 걷기는 싫고 쇼핑은 피하고 싶어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": false,
+      "remainingAvoid": "오래 걷기는 싫고 쇼핑은 피하고 싶어요",
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "mixed_walk_and_shopping",
+    "draft": {
+      "originalText": "오래 걷는 코스와 쇼핑은 피하고 싶어요.",
+      "avoid": "오래 걷는 코스와 쇼핑은 피하고 싶어요",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": false,
+      "remainingAvoid": "오래 걷는 코스와 쇼핑은 피하고 싶어요",
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "unrelated_cafe_time_not_walk_bound",
+    "draft": {
+      "originalText": "최대 20분 카페에 있다가 오래 걷기는 싫어요.",
+      "avoid": "오래 걷기는 싫어요",
+      "avoidImportance": "required",
+      "walking": "40"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": null,
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "source_negative_over_20",
+    "draft": {
+      "originalText": "20분 넘게 걷기는 싫어요.",
+      "avoid": "긴 도보 이동",
+      "avoidImportance": "required",
+      "walking": "40"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": "conflict",
+      "sourceMaxMinutes": 20
+    }
+  },
+  {
+    "id": "source_only_20_walking",
+    "draft": {
+      "originalText": "한 번에 20분까지만 걷고 싶어요",
+      "avoid": "긴 도보 이동",
+      "avoidImportance": "required",
+      "walking": "40"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": "conflict",
+      "sourceMaxMinutes": 20
+    }
+  },
+  {
+    "id": "strict_negative_at_least_20_choice_20",
+    "draft": {
+      "originalText": "20분 이상 걷는 건 피하고 싶어요",
+      "avoid": "긴 도보 이동",
+      "avoidImportance": "required",
+      "walking": "20"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  },
+  {
+    "id": "strict_negative_at_least_20_choice_40",
+    "draft": {
+      "originalText": "20분 이상 걷는 건 피하고 싶어요",
+      "avoid": "긴 도보 이동",
+      "avoidImportance": "required",
+      "walking": "40"
+    },
+    "expected": {
+      "recognizedWalkingAvoid": true,
+      "remainingAvoid": null,
+      "issue": "unsupportedScope",
+      "sourceMaxMinutes": null
+    }
+  }
+]

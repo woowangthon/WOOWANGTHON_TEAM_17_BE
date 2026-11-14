@@ -281,6 +281,14 @@ def _schedule_clarifications(conn, items: list[dict[str, Any]]) -> tuple[list[di
             clarifications.append({"itemId": item["id"], "fields": fields,
                                   "code": "SCHEDULE_ITEM_CLARIFICATION_REQUIRED",
                                   "candidates": [{"contentid": r["contentid"], "title": r["title"], "address": r["addr1"]} for r in candidates]})
+    from .preference_grounding import schedule_conflict_fields
+    by_id = {entry["itemId"]: entry for entry in clarifications}
+    for item_id, conflict_fields in schedule_conflict_fields(resolved).items():
+        if item_id in by_id:
+            by_id[item_id]["fields"] = sorted(set(by_id[item_id]["fields"]) | conflict_fields)
+        else:
+            clarifications.append({"itemId": item_id, "fields": sorted(conflict_fields),
+                                   "code": "SCHEDULE_ITEM_CLARIFICATION_REQUIRED", "candidates": []})
     return resolved, clarifications
 
 
@@ -499,6 +507,9 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
             missing = [field for field in ("originalText", "likes") if not draft[field]]
             if draft["walking"] not in WALKING:
                 missing.append("walking")
+            from .walking_preferences import resolve_walking_preference
+            if resolve_walking_preference(draft)["issue"] and "walking" not in missing:
+                missing.append("walking")
             resolved, clarifications = _schedule_clarifications(conn, draft.get("scheduleItems", []))
             if clarifications:
                 missing.extend(f"scheduleItems.{item['itemId']}" for item in clarifications)
@@ -704,7 +715,8 @@ def _validate_interpret_result(result: Any, ApiError) -> dict[str, Any]:
 def _default_interpreter(original_text: str, conditions: dict[str, Any]):
     try:
         from chungbuk_trip_ai import interpret_personal_draft
-        return interpret_personal_draft(original_text=original_text, conditions=conditions)
+        from .preference_grounding import ground_interpretation
+        return ground_interpretation(original_text, interpret_personal_draft(original_text=original_text, conditions=conditions))
     except Exception as exc:
         # Preserve typed provider distinctions without exposing provider details.
         if type(exc).__name__ in {"GeminiError", "GeminiUnavailableError", "GeminiTimeoutError", "GeminiInvalidResponseError"}:

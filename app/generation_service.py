@@ -18,7 +18,7 @@ from typing import Any, Callable
 from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
 
-from . import confirmed_preferences, generation_foundation as foundation, generation_reviews, place_catalog, preparation
+from . import confirmed_preferences, generation_foundation as foundation, generation_reviews, place_catalog, preparation, generation_policy
 
 
 class ServiceError(Exception):
@@ -110,8 +110,12 @@ class GenerationService:
                     raw_draft = _json(draft_row["draft_json"])
                     draft = preparation.validate_draft({**raw_draft, "scheduleItems": raw_draft.get("scheduleItems", [])})
                     source_document_digest = hashlib.sha256(_canonical(draft).encode()).hexdigest()
+                    from .walking_preferences import resolve_walking_preference
+                    walking_issue = resolve_walking_preference(draft)["issue"]
+                    if walking_issue:
+                        required_ready = False
                     if m["role"] == "OWNER":
-                        required_ready = bool(draft["likes"] and draft["walking"] in preparation.WALKING)
+                        required_ready = required_ready and bool(draft["likes"] and draft["walking"] in preparation.WALKING)
                     _, unresolved = preparation._schedule_clarifications(conn, draft["scheduleItems"])
                     schedule_ready = not unresolved
                 except Exception:
@@ -129,7 +133,8 @@ class GenerationService:
                                  "confirmedPreferenceVersion": int(d["confirmed_preference_version"]),
                                  "sourceDocumentDigest": source_document_digest, "scheduleReady": schedule_ready,
                                  "requiredReady": required_ready})
-        stamp = {"policyVersion": confirmed_preferences.POLICY_VERSION, "conditionsVersion": cv,
+        stamp = {"policyVersion": confirmed_preferences.POLICY_VERSION,
+                 "generationPolicyVersion": generation_policy.GENERATION_POLICY_VERSION, "conditionsVersion": cv,
                  "members": personal, "settingsVersion": settings_version, "catalogDigest": catalog_digest}
         return hashlib.sha256(_canonical(stamp).encode()).hexdigest(), statuses, personal
 
@@ -141,6 +146,7 @@ class GenerationService:
         by_member = {str(r["member_id"]): r for r in docs}
         tags = build_supported_tags(catalog)
         issues = set()
+        confirmed_group = []
         for member in members:
             doc = by_member.get(str(member["id"]))
             if not doc or not foundation._confirmed_doc(doc, conditions_version): continue
@@ -155,7 +161,11 @@ class GenerationService:
                 issues.add("PREPARATION_NOT_READY"); continue
             if member["role"] != "OWNER" and any(item["scope"] == "group" for item in draft["scheduleItems"]):
                 issues.add("SCHEDULE_SCOPE_INVALID")
+            from .walking_preferences import resolve_walking_preference
+            if resolve_walking_preference(draft)["issue"]:
+                issues.add("REQUIRED_PREFERENCE_UNSATISFIED")
             pref = {"memberRef": "p1", **{k: draft[k] for k in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking", "scheduleItems")}}
+            confirmed_group.append({**pref, "memberRef": f"p{len(confirmed_group) + 1}"})
             if member["role"] == "OWNER":
                 try:
                     confirmed_preferences.group_schedule_anchors([pref], common_settings, {"members": [{"memberId": member["id"], "role": "OWNER"}]})
@@ -163,6 +173,8 @@ class GenerationService:
                     issues.add("SCHEDULE_ITEM_CLARIFICATION_REQUIRED")
             issues.update(item["code"] for item in confirmed_preferences.analyze_preferences([pref], tags)["issues"]
                           if item["code"].startswith("REQUIRED_"))
+        issues.update(item["code"] for item in confirmed_preferences.analyze_preferences(confirmed_group, tags)["issues"]
+                      if item["code"].startswith("REQUIRED_"))
         return sorted(issues)
 
     def _snapshot(self, conn, request, trip_id):
@@ -287,6 +299,11 @@ class GenerationService:
             dto = generation_reviews.normalization_dto(raw, review, version, current) if raw and current else {"normalization": None, "reviewVersion": version, "review": review if current else None, "stale": bool(row)}
             from .candidate_selection import build_supported_tags
             issues = confirmed_preferences.preference_issues(snapshot.confirmed_preferences(), build_supported_tags(catalog))
+            from .walking_preferences import resolve_walking_preference
+            if resolve_walking_preference(draft)["issue"]:
+                walking_issue = {"field": "walking", "code": "REQUIRED_PREFERENCE_UNSATISFIED"}
+                if walking_issue not in issues:
+                    issues.append(walking_issue)
             clarifications = []
             if draft.get("scheduleItems"):
                 _, clarifications = preparation._schedule_clarifications(conn, draft["scheduleItems"])
@@ -738,9 +755,17 @@ class GenerationService:
         finally: conn.close()
         # Root's validator and router own all route/time checks and public node IDs.
         from .day_schedule import build_scheduled_plan
+        from .place_semantics import build_place_semantics
+        semantic_context = build_place_semantics(
+            catalog, draft.get("optimizationCandidates", []),
+            provider=getattr(self.app.state, "generation_embedder", None),
+            deadline=min(deadline, time.monotonic() + 8.0))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0: raise ServiceError("AI_TIMEOUT", 504)
         router = self.app.state.generation_router
         document = build_scheduled_plan(draft, catalog, snapshot.as_dict()["conditions"], remapped_prefs,
-                                           gen_settings, router, timeout_seconds=90)
+                                       gen_settings, router, timeout_seconds=min(90, remaining),
+                                       semantic_context=semantic_context)
         if time.monotonic() >= deadline: raise ServiceError("AI_TIMEOUT", 504)
         conn = self._conn()
         try:

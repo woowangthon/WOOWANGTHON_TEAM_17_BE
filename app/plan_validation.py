@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from . import place_catalog
+from .generation_policy import car_leg_exceeds_limit
 from .routing import KakaoRouter, _coord, unknown_route
 
 KST = timezone(timedelta(hours=9), "Asia/Seoul")
@@ -217,6 +218,7 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
             if presentation.get("openingHoursText"):
                 node["openingHoursText"] = presentation["openingHoursText"]
             route = unknown_route(mode, "ROUTE_COORDINATE_INVALID")
+            car_leg_over_limit = False
             if previous and _coord(previous.get("coordinate")) and _coord(coordinate):
                 if counts >= 64:
                     route = unknown_route(mode, "ROUTE_LIMIT_REACHED")
@@ -227,6 +229,8 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
                 else:
                     counts += 1
                     route = _route_facts(router, previous["coordinate"], coordinate, mode)
+                    car_leg_over_limit = (route.get("status") == "verified" and car_leg_exceeds_limit(
+                        mode, route.get("durationSeconds"), from_kind=previous["kind"], to_kind=node["kind"]))
                     if time.monotonic() > deadline:
                         route = unknown_route(mode, "VALIDATION_TIMEOUT")
             else:
@@ -244,6 +248,9 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
                     reasons["walking"].append("WALKING_ROUTE_UNKNOWN")
                 elif max_walk is not None and any(seconds > max_walk for seconds in walks):
                     fail("walking", "WALKING_LIMIT_EXCEEDED", day, cid)
+            if previous and (car_leg_over_limit or car_leg_exceeds_limit(
+                    mode, route.get("durationSeconds"), from_kind=previous["kind"], to_kind=node["kind"])):
+                fail("time", "CAR_LEG_TIME_LIMIT_EXCEEDED", day, cid)
             route_cost = route["knownCostKrw"]
             if route_cost is not None:
                 route_cost *= people if mode == "transit" else 1
