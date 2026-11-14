@@ -83,6 +83,22 @@ def test_candidate_pool_replacement_keeps_dates_and_requires_better_score():
     assert report["finalPreferenceScore"] > report["baselinePreferenceScore"]
 
 
+def test_candidate_replacement_filters_eligible_rows_before_capping():
+    original = draft([1])
+    pool = [{"contentid": cid, "planningRole": "sightseeing_stop", "allowedDates": [DAY],
+             "groupScore": 100.0 if cid == 25 else 0.1}
+            for cid in range(1, 26)]
+
+    def evaluate(candidate):
+        plan = {"days": [{"edges": [{"status": "verified", "durationSeconds": 60}]}],
+                "validation": {"warnings": [], "violations": []}}
+        return copy.deepcopy(candidate), plan, {}
+
+    result, _plan, _settings, report = optimize_itinerary(original, {}, pool, evaluate)
+    assert result["days"][0]["places"][0]["contentid"] == 25
+    assert report["acceptedMovesByPhase"]["candidate_replace"] >= 1
+
+
 def test_unknown_route_cost_is_not_imputed_as_zero():
     value = draft([1])
     def evaluate(candidate):

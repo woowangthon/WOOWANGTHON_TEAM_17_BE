@@ -755,9 +755,17 @@ class GenerationService:
         finally: conn.close()
         # Root's validator and router own all route/time checks and public node IDs.
         from .day_schedule import build_scheduled_plan
+        from .place_semantics import build_place_semantics
+        semantic_context = build_place_semantics(
+            catalog, draft.get("optimizationCandidates", []),
+            provider=getattr(self.app.state, "generation_embedder", None),
+            deadline=min(deadline, time.monotonic() + 8.0))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0: raise ServiceError("AI_TIMEOUT", 504)
         router = self.app.state.generation_router
         document = build_scheduled_plan(draft, catalog, snapshot.as_dict()["conditions"], remapped_prefs,
-                                           gen_settings, router, timeout_seconds=90)
+                                       gen_settings, router, timeout_seconds=min(90, remaining),
+                                       semantic_context=semantic_context)
         if time.monotonic() >= deadline: raise ServiceError("AI_TIMEOUT", 504)
         conn = self._conn()
         try:

@@ -61,7 +61,7 @@ def _rank_count(candidates: dict[int, dict[str, Any]]) -> int | None:
 
 
 def _preference_score(draft: dict[str, Any], candidates: dict[int, dict[str, Any]],
-                      anchors: set[tuple[str, int]] | None = None) -> float:
+                      anchors: set[tuple[str, int]] | None = None, semantic_context: Any = None) -> float:
     """Same-day category utility with a 1/k marginal discount for repeats."""
     rank_count = _rank_count(candidates)
     anchors = anchors or set()
@@ -85,6 +85,12 @@ def _preference_score(draft: dict[str, Any], candidates: dict[int, dict[str, Any
             # Negative fallback scores represent avoids. Repetition must never
             # make them less negative or turn an avoided category into a gain.
             score += sum(value for value in values if value <= 0)
+    if semantic_context is not None and getattr(semantic_context, "enabled", False):
+        try:
+            from .place_semantics import semantic_adjusted_score
+            return semantic_adjusted_score(draft, candidates, score, semantic_context, anchors)
+        except Exception:
+            pass
     return score
 
 
@@ -109,10 +115,10 @@ def _category_repetitions(draft: dict[str, Any], candidates: dict[int, dict[str,
 
 
 def _rank(draft: dict[str, Any], plan: dict[str, Any], candidates: dict[int, dict[str, Any]],
-          anchors: set[tuple[str, int]] | None = None):
+          anchors: set[tuple[str, int]] | None = None, semantic_context: Any = None):
     travel = _travel_seconds(plan)
     # Unknown routes are never assigned a zero cost or treated as an improvement.
-    return (sum(_violations(plan).values()), -_preference_score(draft, candidates, anchors),
+    return (sum(_violations(plan).values()), -_preference_score(draft, candidates, anchors, semantic_context),
             travel if travel is not None else float("inf"))
 
 
@@ -168,7 +174,7 @@ def _valid_candidate(draft: dict[str, Any], baseline_visit_count: int, pool: dic
 
 
 def _phase_neighbors(current: dict[str, Any], pool: dict[int, dict[str, Any]], anchors: dict[tuple[str, int], int],
-                     max_visits_per_day: int, phase: str, day_filter: int):
+                     max_visits_per_day: int, phase: str, day_filter: int, semantic_context: Any = None):
     dates = [d["date"] for d in current["days"]]
     used = {p["contentid"] for d in current["days"] for p in d["places"]}
     for day_index, section in enumerate(current["days"]):
@@ -234,12 +240,24 @@ def _phase_neighbors(current: dict[str, Any], pool: dict[int, dict[str, Any]], a
                 old_role = old.get("planningRole")
                 if old_role not in _FLEXIBLE_ROLES | {"meal_stop"}:
                     continue
-                for replacement, info in pool.items():
-                    if replacement in used or date not in info.get("allowedDates", dates):
-                        continue
-                    new_role = info.get("planningRole")
-                    if not ((old_role in _FLEXIBLE_ROLES and new_role in _FLEXIBLE_ROLES)
-                            or (old_role == new_role == "meal_stop")):
+                options = [info for info in pool.values()
+                           if info.get("contentid") not in used
+                           and date in info.get("allowedDates", dates)
+                           and ((old_role in _FLEXIBLE_ROLES and info.get("planningRole") in _FLEXIBLE_ROLES)
+                                or old_role == info.get("planningRole") == "meal_stop")]
+                if semantic_context is not None and getattr(semantic_context, "enabled", False):
+                    try:
+                        from .place_semantics import mmr_order
+                        options = mmr_order(options, used, semantic_context,
+                                            utility=lambda row: _base_utility(row, _rank_count(pool)), limit=8,
+                                            deadline=time.monotonic() + 0.05)
+                    except Exception:
+                        pass
+                # Candidate pools may contain 200 rows; cap work per removed
+                # stop while keeping MMR/utility ordering deterministic.
+                for info in options[:24]:
+                    replacement = info.get("contentid")
+                    if type(replacement) is not int:
                         continue
                     changed = copy.deepcopy(current)
                     changed["days"][day_index]["places"][source] = {
@@ -249,9 +267,9 @@ def _phase_neighbors(current: dict[str, Any], pool: dict[int, dict[str, Any]], a
                     yield "candidate_replace", changed
 
 
-def _neighbors(current, pool, anchors, max_visits_per_day):
+def _neighbors(current, pool, anchors, max_visits_per_day, semantic_context=None):
     """Share the bounded evaluation budget across methods and trip days."""
-    pending = deque(_phase_neighbors(current, pool, anchors, max_visits_per_day, phase, day)
+    pending = deque(_phase_neighbors(current, pool, anchors, max_visits_per_day, phase, day, semantic_context)
                     for day in range(len(current["days"]))
                     for phase in ("two_opt", "relocate", "date_reallocation", "candidate_replace"))
     while pending:
@@ -267,7 +285,8 @@ def _neighbors(current, pool, anchors, max_visits_per_day):
 def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidate_pool: list[dict[str, Any]],
                        evaluate: Callable[[dict[str, Any]], tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
                        *, max_visits_per_day: int = 8, max_evaluations: int = 24,
-                       time_budget_seconds: float = 1.0) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+                       time_budget_seconds: float = 1.0, semantic_context: Any = None,
+                       search_budget: Any = None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Try a small set of local moves and retain only fully checked safe gains.
 
     `evaluate` returns (scheduled draft, public validation plan, adjusted settings).
@@ -290,15 +309,16 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
     # intentionally omit settings when used by a local/offline score harness.
     anchors = _anchored_positions(settings)
     anchor_ids = set(anchors)
-    current_rank = _rank(current_draft, current_plan, pool, anchor_ids)
+    current_rank = _rank(current_draft, current_plan, pool, anchor_ids, semantic_context)
     attempted = accepted = 0
     utility_screened = 0
     attempted_by_phase = Counter()
     accepted_by_phase = Counter()
-    deadline = time.monotonic() + max(0.01, min(time_budget_seconds, 1.0))
+    deadline = (search_budget.deadline if search_budget is not None
+                else time.monotonic() + max(0.01, min(time_budget_seconds, 1.0)))
     fallback = None
     seen = {_visit_ids(current_draft)}
-    for phase, neighbor in _neighbors(current_draft, pool, anchors, max_visits_per_day):
+    for phase, neighbor in _neighbors(current_draft, pool, anchors, max_visits_per_day, semantic_context):
         if attempted >= max_evaluations or time.monotonic() >= deadline:
             fallback = "SEARCH_BUDGET_REACHED"
             break
@@ -318,9 +338,13 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
         # This check is outside the lazy generator so the wall-clock deadline
         # still applies to every screened candidate.
         if (not _violations(current_plan)
-                and _preference_score(neighbor, pool, anchor_ids) < _preference_score(current_draft, pool, anchor_ids)):
+                and _preference_score(neighbor, pool, anchor_ids, semantic_context)
+                < _preference_score(current_draft, pool, anchor_ids, semantic_context)):
             utility_screened += 1
             continue
+        if search_budget is not None and not search_budget.reserve():
+            fallback = "SEARCH_BUDGET_REACHED"
+            break
         attempted += 1
         attempted_by_phase[phase] += 1
         try:
@@ -337,7 +361,7 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
                 or violations - initial_violations or violations - current_violations
                 or risks - initial_risks or risks - current_risks):
             continue
-        new_rank = _rank(scheduled, plan, pool, anchor_ids)
+        new_rank = _rank(scheduled, plan, pool, anchor_ids, semantic_context)
         if new_rank < current_rank:
             current_draft, current_plan, current_settings = scheduled, plan, adjusted
             current_rank = new_rank
@@ -352,8 +376,8 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
         "finalTravelSeconds": _travel_seconds(current_plan),
         "baselinePreferenceScore": _preference_score(baseline_scheduled, pool, anchor_ids),
         "finalPreferenceScore": _preference_score(current_draft, pool, anchor_ids),
-        "baselineAdjustedUtility": _preference_score(baseline_scheduled, pool, anchor_ids),
-        "finalAdjustedUtility": _preference_score(current_draft, pool, anchor_ids),
+        "baselineAdjustedUtility": _preference_score(baseline_scheduled, pool, anchor_ids, semantic_context),
+        "finalAdjustedUtility": _preference_score(current_draft, pool, anchor_ids, semantic_context),
         "baselineCategoryRepetitions": _category_repetitions(baseline_scheduled, pool, anchor_ids),
         "finalCategoryRepetitions": _category_repetitions(current_draft, pool, anchor_ids),
         "policyVersion": GENERATION_POLICY_VERSION,

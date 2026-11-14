@@ -137,7 +137,7 @@ def app():
     from app.config import Settings
     from app.main import create_app
 
-    return create_app(
+    application = create_app(
         Settings(
             database_url=_test_database_url().render_as_string(hide_password=False),
             environment="test",
@@ -147,6 +147,9 @@ def app():
             rate_limit_enabled=False,
         )
     )
+    # Integration checks must never spend real embedding-provider requests.
+    application.state.generation_embedder = False
+    return application
 
 
 @pytest.fixture
