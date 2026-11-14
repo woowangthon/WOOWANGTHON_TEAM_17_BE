@@ -69,3 +69,28 @@ def test_only_explicit_evening_booking_extends_the_day():
     assert [n["contentid"] for n in stops] == [2]
     assert stops[0]["plannedEndAt"] == "2026-12-12T12:15:00.000Z"
     assert not any(v["code"] == "ACTIVITY_WINDOW_EXCEEDED" for v in plan["validation"]["violations"])
+
+
+def test_ordinary_meal_after_recommended_lunch_band_is_kept_without_waiting():
+    catalog = TripCatalog({1: 300, 2: 75}, meals={2})
+    result = schedule(catalog, [[1, 2]], seconds=780)
+    meal = next(n for n in result["days"][0]["nodes"] if n.get("contentid") == 2)
+    start = datetime.fromisoformat(meal["plannedStartAt"]).astimezone(timezone(timedelta(hours=9)))
+    assert start.hour == 14 and start.minute == 26
+    assert meal["plannedEndAt"] == "2026-12-12T06:41:00.000Z"
+
+
+def test_actual_restaurant_opening_time_remains_a_hard_wait():
+    catalog = TripCatalog({2: 60}, meals={2})
+    catalog.details[0]["openingHoursText"] = "17:30~20:00"
+    result = schedule(catalog, [[2]], seconds=780)
+    meal = next(n for n in result["days"][0]["nodes"] if n.get("contentid") == 2)
+    assert meal["plannedStartAt"] == "2026-12-12T08:30:00.000Z"
+
+
+def test_user_fixed_meal_time_remains_hard():
+    anchor = {"kind": "appointment", "date": "2026-12-12", "position": 0,
+              "contentid": 2, "startTime": "17:30", "endTime": "18:30"}
+    result = schedule(TripCatalog({2: 60}, meals={2}), [[2]], [anchor], seconds=780)
+    meal = next(n for n in result["days"][0]["nodes"] if n.get("contentid") == 2)
+    assert meal["plannedStartAt"] == "2026-12-12T08:30:00.000Z"

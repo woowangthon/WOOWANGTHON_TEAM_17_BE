@@ -146,14 +146,18 @@ def test_default_rest_provider_uses_existing_key_loader_and_validated_public_req
     assert captured["closed"] is True
 
 
-def test_provider_cannot_enable_semantics_after_passing_its_deadline():
+def test_provider_cannot_enable_semantics_after_passing_its_deadline(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(semantics, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
     def slow_provider(texts, *, timeout_seconds):
-        import time
-        time.sleep(min(0.02, timeout_seconds + 0.01))
+        # Advance an isolated clock: Windows timer granularity makes a real
+        # 1ms deadline plus an 11ms sleep an unreliable timeout regression.
+        now[0] += timeout_seconds + 1.0
         return [vector(index) for index, _ in enumerate(texts)]
 
     result = semantics.build_place_semantics(
-        rows(), candidates(), provider=slow_provider, deadline=__import__("time").monotonic() + 0.001)
+        rows(), candidates(), provider=slow_provider, deadline=now[0] + 0.001)
     assert not result.enabled
     assert result.status == "EMBEDDING_BUDGET_EXHAUSTED"
     assert result.vectors == {}

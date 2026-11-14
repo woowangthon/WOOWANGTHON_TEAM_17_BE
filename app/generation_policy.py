@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
-GENERATION_POLICY_VERSION = "alns-mmr-category-car40-walking-v3"
+GENERATION_POLICY_VERSION = "soft-meals-alns-mmr-car40-walking-v4"
 CAR_LEG_MAX_SECONDS = 40 * 60
 
 

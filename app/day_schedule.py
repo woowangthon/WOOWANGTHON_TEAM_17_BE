@@ -109,12 +109,9 @@ def _fit_day(stops, *, day, start, end, origin, destination, anchors, details, r
                 duration = 0 if cid in overnight else 60
                 if cid not in overnight:
                     warnings.add("STAY_TIME_ESTIMATED")
-            meal_end = None
             if is_meal and meals < len(meal_windows):
-                meal_start, meal_end = meal_windows[meals]
-                if not anchor.get("startTime"):
-                    now = max(now, meal_start)
-                    earliest = max(earliest, meal_start)
+                # General meal times are recommendations. Explicit anchor
+                # times and actual operating hours remain hard constraints.
                 meals += 1
             finish = now + timedelta(minutes=duration)
             if anchor.get("endTime"):
@@ -125,7 +122,7 @@ def _fit_day(stops, *, day, start, end, origin, destination, anchors, details, r
             slots[cid] = (now, finish)
             # Explicit late appointments may extend this day. Ordinary visits use the daily limit.
             limit = max(end, finish) if is_late_booking(anchor, end) else end
-            if finish < now or finish > limit or (meal_end and finish > meal_end and not anchor):
+            if finish < now or finish > limit:
                 problem = index
                 break
             if cid not in overnight and _opening(detail, now, finish) == "violated":

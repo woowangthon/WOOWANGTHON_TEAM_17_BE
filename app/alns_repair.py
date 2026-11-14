@@ -462,8 +462,10 @@ def repair_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidate_
                 continue
             try:
                 from .itinerary_optimizer import _rank
-                old_rank = _rank(best_draft, best_plan, pool, anchors, semantic_context)
-                new_rank = _rank(scheduled, plan, pool, anchors, semantic_context)
+                old_rank = _rank(best_draft, best_plan, pool, anchors, semantic_context,
+                                 activity_window=(best_settings or settings).get("activityWindow"))
+                new_rank = _rank(scheduled, plan, pool, anchors, semantic_context,
+                                 activity_window=adjusted.get("activityWindow") or settings.get("activityWindow"))
             except Exception:
                 old_rank = new_rank = (0, 0, float("inf"))
             if new_rank < old_rank:

@@ -13,6 +13,7 @@ from collections import Counter, deque
 from typing import Any, Callable
 
 from .generation_policy import GENERATION_POLICY_VERSION
+from .meal_preferences import meal_deviation_minutes
 
 
 _FLEXIBLE_ROLES = {"sightseeing_stop", "culture_stop", "activity_stop", "shopping_stop", "date_specific_event"}
@@ -115,10 +116,12 @@ def _category_repetitions(draft: dict[str, Any], candidates: dict[int, dict[str,
 
 
 def _rank(draft: dict[str, Any], plan: dict[str, Any], candidates: dict[int, dict[str, Any]],
-          anchors: set[tuple[str, int]] | None = None, semantic_context: Any = None):
+          anchors: set[tuple[str, int]] | None = None, semantic_context: Any = None, *, activity_window=None):
     travel = _travel_seconds(plan)
+    meal_deviation = meal_deviation_minutes(plan, candidates, anchors, activity_window=activity_window)
     # Unknown routes are never assigned a zero cost or treated as an improvement.
     return (sum(_violations(plan).values()), -_preference_score(draft, candidates, anchors, semantic_context),
+            meal_deviation if meal_deviation is not None else float("inf"),
             travel if travel is not None else float("inf"))
 
 
@@ -309,7 +312,9 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
     # intentionally omit settings when used by a local/offline score harness.
     anchors = _anchored_positions(settings)
     anchor_ids = set(anchors)
-    current_rank = _rank(current_draft, current_plan, pool, anchor_ids, semantic_context)
+    activity_window = current_settings.get("activityWindow") or settings.get("activityWindow")
+    current_rank = _rank(current_draft, current_plan, pool, anchor_ids, semantic_context,
+                         activity_window=activity_window)
     attempted = accepted = 0
     utility_screened = 0
     attempted_by_phase = Counter()
@@ -361,7 +366,8 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
                 or violations - initial_violations or violations - current_violations
                 or risks - initial_risks or risks - current_risks):
             continue
-        new_rank = _rank(scheduled, plan, pool, anchor_ids, semantic_context)
+        new_rank = _rank(scheduled, plan, pool, anchor_ids, semantic_context,
+                         activity_window=adjusted.get("activityWindow") or activity_window)
         if new_rank < current_rank:
             current_draft, current_plan, current_settings = scheduled, plan, adjusted
             current_rank = new_rank
