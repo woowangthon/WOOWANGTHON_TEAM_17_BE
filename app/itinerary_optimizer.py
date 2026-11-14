@@ -13,7 +13,7 @@ from collections import Counter, deque
 from typing import Any, Callable
 
 from .generation_policy import GENERATION_POLICY_VERSION, place_distance_km
-from .meal_preferences import meal_deviation_minutes
+from .meal_preferences import meal_deviation_minutes, requested_meal_periods
 
 
 _FLEXIBLE_ROLES = {"sightseeing_stop", "culture_stop", "activity_stop", "shopping_stop", "date_specific_event"}
@@ -117,9 +117,12 @@ def _category_repetitions(draft: dict[str, Any], candidates: dict[int, dict[str,
 
 def _rank(draft: dict[str, Any], plan: dict[str, Any], candidates: dict[int, dict[str, Any]],
           anchors: set[tuple[str, int]] | None = None, semantic_context: Any = None, *, activity_window=None,
-          route_preferences=None, catalog=None, required_visits=()):
+          route_preferences=None, catalog=None, required_visits=(), meal_periods=None):
     travel = _travel_seconds(plan)
-    meal_deviation = meal_deviation_minutes(plan, candidates, anchors, activity_window=activity_window)
+    meal_args = {"activity_window": activity_window}
+    if meal_periods:
+        meal_args["meal_periods"] = meal_periods
+    meal_deviation = meal_deviation_minutes(plan, candidates, anchors, **meal_args)
     # Unknown routes are never assigned a zero cost or treated as an improvement.
     unknown_quotas, quota_penalty = 0, 0.0
     if route_preferences is not None and catalog is not None:
@@ -153,7 +156,7 @@ def _anchored_positions(settings: dict[str, Any]) -> dict[tuple[str, int], int]:
     return result
 
 
-def _risk_counts(plan: dict[str, Any]) -> Counter:
+def _risk_counts(plan: dict[str, Any], *, growing=False) -> Counter:
     risks = Counter()
     for code in plan["validation"].get("warnings", []):
         if code == "REQUIRED_PREFERENCE_UNVERIFIED":
@@ -169,14 +172,21 @@ def _risk_counts(plan: dict[str, Any]) -> Counter:
             if edge.get("walkingSeconds") is None:
                 risks[("walking", "WALKING_ROUTE_UNKNOWN")] += 1
             if edge.get("costComplete") is not True:
-                risks[("budget", "TRANSPORT_COST_INCOMPLETE")] += 1
+                # Real car routes verify travel but omit fuel and parking on
+                # every leg. An added stop still has that same open cost item.
+                if growing and edge.get("status") == "verified" and edge.get("mode") == "car":
+                    risks[("budget", "VERIFIED_CAR_COST_INCOMPLETE")] = 1
+                else:
+                    risks[("budget", "TRANSPORT_COST_INCOMPLETE")] += 1
     return risks
 
 
 def _valid_candidate(draft: dict[str, Any], baseline_visit_count: int, pool: dict[int, dict[str, Any]],
-                     max_visits_per_day: int, baseline_ids: set[int]) -> bool:
+                     max_visits_per_day: int, baseline_ids: set[int], *, allow_growth: bool = False,
+                     anchors=()) -> bool:
     dates = {day["date"] for day in draft["days"]}
     visit_count = 0
+    seen_trip: dict[int, str] = {}
     for day in draft["days"]:
         if len(day["places"]) > max_visits_per_day:
             return False
@@ -185,23 +195,28 @@ def _valid_candidate(draft: dict[str, Any], baseline_visit_count: int, pool: dic
             cid = place.get("contentid")
             if type(cid) is not int or cid in seen_today or (cid not in pool and cid not in baseline_ids):
                 return False
+            if cid in seen_trip and ((seen_trip[cid], cid) not in anchors or (day["date"], cid) not in anchors):
+                return False
             seen_today.add(cid)
+            seen_trip[cid] = day["date"]
             visit_count += 1
             candidate = pool.get(cid)
             if candidate is not None and day["date"] not in candidate.get("allowedDates", dates):
                 return False
     # A route-order move cannot silently drop a current visit. Pool selection
     # may replace one with another eligible candidate, but count stays fixed.
-    return visit_count == baseline_visit_count
+    return visit_count == baseline_visit_count or (allow_growth and visit_count == baseline_visit_count + 1)
 
 
 def _replace_stop(draft, day_index, position, candidate):
     changed = copy.deepcopy(draft)
-    fields = ("contentid", "title", "planningRole", "adminCity", "coordinate", "estimatedStayMinutes", "categoryKey")
-    changed["days"][day_index]["places"][position] = {
-        **{key: candidate[key] for key in fields if key in candidate}, "visitPosition": position,
-    }
+    changed["days"][day_index]["places"][position] = _pool_place(candidate, position)
     return changed
+
+
+def _pool_place(candidate, position):
+    fields = ("contentid", "title", "planningRole", "adminCity", "coordinate", "estimatedStayMinutes", "categoryKey")
+    return {**{key: candidate[key] for key in fields if key in candidate}, "visitPosition": position}
 
 
 def _requested_visit_swaps(current, pool, anchors, rules):
@@ -258,6 +273,98 @@ def _requested_visit_swaps(current, pool, anchors, rules):
                 break
     for index, position, cid in sorted(trials, key=trials.get):
         yield "requested_visit", _replace_stop(current, index, position, pool[cid])
+
+
+def _composition_neighbors(current, pool, anchors, max_visits_per_day, rules):
+    """Insert a missing requested role, or replace a genuinely surplus meal.
+
+    Goal IDs are already filtered by the preference compiler and candidate
+    selection. Geometry only orders trials; the whole-plan evaluator decides
+    whether a move fits routes, time, walking, budget and risk constraints.
+    """
+    if not rules or not pool:
+        return
+    dates = [day["date"] for day in current["days"]]
+    day_ids = [[place["contentid"] for place in day["places"]] for day in current["days"]]
+    used = {cid for row in day_ids for cid in row}
+    role = lambda cid: pool.get(cid, {}).get("planningRole")
+    meal_goals, tourism_goals = [], []
+    for rule in rules:
+        dimension = rule.get("dimension")
+        if dimension not in {"sightseeing", "meals", "catalog_food", "catalog_activity", "tag_food", "tag_activity", "tag"}:
+            continue
+        meal_ids = [cid for cid in rule["contentids"] if role(cid) == "meal_stop"]
+        tourism_ids = [cid for cid in rule["contentids"] if role(cid) in _FLEXIBLE_ROLES]
+        if dimension == "tag" and meal_ids and tourism_ids:
+            continue
+        if meal_ids and dimension in {"meals", "catalog_food", "tag_food", "tag"}:
+            meal_goals.append({**rule, "contentids": meal_ids})
+        if tourism_ids and dimension in {"sightseeing", "catalog_activity", "tag_activity", "tag"}:
+            tourism_goals.append({**rule, "contentids": tourism_ids})
+
+    def deficit(rule, day_index):
+        ids = set(rule["contentids"])
+        if rule["period"] == "day":
+            observed = sum(cid in ids for cid in day_ids[day_index])
+        else:
+            observed = sum(cid in ids for row in day_ids for cid in row)
+        return max(0, rule["count"] - observed)
+
+    # Tourism is explicitly targeted first so restaurant-heavy drafts have a
+    # bounded way to recover an activity without imposing a general tourism floor.
+    for rule in tourism_goals + meal_goals:
+        if not deficit(rule, 0) and rule["period"] != "day":
+            continue
+        for day_index, section in enumerate(current["days"]):
+            if not deficit(rule, day_index):
+                continue
+            date = section["date"]
+            candidate_rows = [pool[cid] for cid in rule["contentids"] if cid in pool and cid not in used
+                              and date in pool[cid].get("allowedDates", dates)]
+            # Keep candidates near this day's current anchors and visits; this
+            # avoids burning uncached route trials on obviously distant options.
+            refs = [pool.get(place["contentid"], place) for place in section["places"]]
+            candidate_rows.sort(key=lambda row: (
+                min((place_distance_km(ref, row) for ref in refs), default=0.0),
+                row.get("selectionRank", 0), row["contentid"]))
+            places = section["places"]
+            room = len(places) < max_visits_per_day
+            positions = range(len(places) + 1) if room else ()
+            options = []
+            for row in candidate_rows[:8]:
+                for position in positions:
+                    # Never shift a confirmed non-lodging stop's position.
+                    if any(anchor_date == date and role(anchor_id) not in {"overnight_lodging", "overnight_camping"}
+                           and position <= expected
+                           for (anchor_date, anchor_id), expected in anchors.items()):
+                        continue
+                    before = places[position - 1] if position else None
+                    after = places[position] if position < len(places) else None
+                    extra = ((place_distance_km(before, row) if before else 0.0)
+                             + (place_distance_km(row, after) if after else 0.0)
+                             - (place_distance_km(before, after) if before and after else 0.0))
+                    options.append((extra, row.get("selectionRank", 0), row["contentid"], position, row, False))
+            # A full day can use an unanchored meal only when a separate meal
+            # request remains satisfied after removing it.
+            if not room and meal_goals:
+                meal_limit = max((rule["count"] for rule in meal_goals
+                                  if rule["period"] != "day" or deficit(rule, day_index) == 0), default=0)
+                meals_here = [i for i, place in enumerate(places)
+                              if role(place["contentid"]) == "meal_stop"
+                              and (date, place["contentid"]) not in anchors]
+                if len(meals_here) > meal_limit:
+                    for row in candidate_rows[:8]:
+                        for position in meals_here:
+                            old = places[position]
+                            options.append((place_distance_km(old, row), row.get("selectionRank", 0),
+                                            row["contentid"], position, row, True))
+            for _extra, _rank_value, _cid, position, row, replace_meal in sorted(options, key=lambda option: option[:4])[:12]:
+                changed = copy.deepcopy(current)
+                if replace_meal:
+                    changed["days"][day_index]["places"][position] = _pool_place(row, position)
+                else:
+                    changed["days"][day_index]["places"].insert(position, _pool_place(row, position))
+                yield "composition_insert", changed
 
 
 def _phase_neighbors(current: dict[str, Any], pool: dict[int, dict[str, Any]], anchors: dict[tuple[str, int], int],
@@ -356,6 +463,7 @@ def _neighbors(current, pool, anchors, max_visits_per_day, semantic_context=None
                     for phase in ("two_opt", "relocate", "date_reallocation", "candidate_replace"))
     if requested_rules:
         pending.appendleft(_requested_visit_swaps(current, pool, anchors, requested_rules))
+        pending.appendleft(_composition_neighbors(current, pool, anchors, max_visits_per_day, requested_rules))
     while pending:
         iterator = pending.popleft()
         try:
@@ -389,12 +497,15 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
     initial_warnings = _warnings(baseline_plan)
     initial_violations = _violations(baseline_plan)
     initial_risks = _risk_counts(baseline_plan)
+    initial_visit_count = sum(len(day["places"]) for day in baseline_scheduled["days"])
     current_draft, current_plan, current_settings = baseline_scheduled, baseline_plan, baseline_settings
     # The caller's captured anchors are the authority; evaluator output may
     # intentionally omit settings when used by a local/offline score harness.
     anchors = _anchored_positions(settings)
     anchor_ids = set(anchors)
     activity_window = current_settings.get("activityWindow") or settings.get("activityWindow")
+    compiled_preferences = current_settings.get("_routePreferences") or settings.get("_routePreferences") or {}
+    meal_periods = requested_meal_periods(compiled_preferences)
     attempted = accepted = 0
     utility_screened = 0
     attempted_by_phase = Counter()
@@ -407,19 +518,26 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
     if route_preferences and catalog is not None:
         from .route_preferences import draft_preference_rules
         requested_goals = [rule for rule in route_preferences.get("countRules", [])
-                           if rule.get("dimension") in {"market", "catalog_food", "catalog_activity", "catalog_atmosphere",
-                                                       "tag_food", "tag_activity", "tag"}
+                           if rule.get("dimension") in {"market", "sightseeing", "meals", "catalog_food", "catalog_activity",
+                                                       "catalog_atmosphere", "tag_food", "tag_activity", "tag"}
                            and (rule.get("polarity", "prefer") == "prefer"
                                 or (rule.get("polarity") == "limit" and rule.get("operator") == "exact"))
                            and rule.get("operator") in {"min", "exact", "target"}
                            and type(rule.get("count")) is int and rule["count"] > 0]
         if requested_goals:
-            requested_rules = draft_preference_rules({"countRules": requested_goals}, catalog, list(pool))
+            for goal in requested_goals:
+                requested_rules.extend({**rule, "dimension": goal.get("dimension")}
+                                       for rule in draft_preference_rules({"countRules": [goal]}, catalog, list(pool)))
+            # Keep the bounded rule list deterministic when equivalent compiled
+            # requests resolve to the same candidate set.
+            requested_rules = list({tuple((key, tuple(value) if isinstance(value, list) else value)
+                                          for key, value in sorted(rule.items())): rule
+                                    for rule in requested_rules}.values())
     required_visits = [(set(rule["contentids"]), rule["period"], rule["count"])
                        for rule in requested_rules if rule["required"]]
     current_rank = _rank(current_draft, current_plan, pool, anchor_ids, semantic_context,
                          activity_window=activity_window, route_preferences=route_preferences, catalog=catalog,
-                         required_visits=required_visits)
+                         required_visits=required_visits, meal_periods=meal_periods)
     neighbors = _neighbors(current_draft, pool, anchors, max_visits_per_day, semantic_context, requested_rules)
     while True:
         if attempted >= max_evaluations or time.monotonic() >= deadline:
@@ -433,11 +551,9 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
         if signature in seen:
             continue
         seen.add(signature)
-        # Visit count must remain unchanged; the evaluator may reorder or replace,
-        # but additions are refused because the current human-reviewed draft has
-        # not yet established that an extra stop is desirable.
+        # Only an unfilled explicit request can propose adding a visit.
         if not _valid_candidate(neighbor, sum(len(day["places"]) for day in current_draft["days"]),
-                                pool, max_visits_per_day, ids):
+                                pool, max_visits_per_day, ids, allow_growth=phase == "composition_insert", anchors=anchors):
             continue
         # With no hard violation to repair, a lower-utility neighbor cannot win
         # the lexicographic objective even with a shorter route. Do not spend
@@ -461,23 +577,26 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
             continue
         warnings = _warnings(plan)
         violations = _violations(plan)
-        risks = _risk_counts(plan)
+        grew = sum(len(day["places"]) for day in scheduled["days"]) > initial_visit_count
+        risks = _risk_counts(plan, growing=grew)
         current_warnings = _warnings(current_plan)
         current_violations = _violations(current_plan)
-        current_risks = _risk_counts(current_plan)
+        current_risks = _risk_counts(current_plan, growing=grew)
+        comparison_risks = _risk_counts(baseline_plan, growing=True) if grew else initial_risks
         if (warnings - initial_warnings or warnings - current_warnings
                 or violations - initial_violations or violations - current_violations
-                or risks - initial_risks or risks - current_risks):
+                or risks - comparison_risks or risks - current_risks):
             continue
         new_rank = _rank(scheduled, plan, pool, anchor_ids, semantic_context,
                          activity_window=adjusted.get("activityWindow") or activity_window,
-                         route_preferences=route_preferences, catalog=catalog, required_visits=required_visits)
+                         route_preferences=route_preferences, catalog=catalog, required_visits=required_visits,
+                         meal_periods=meal_periods)
         if new_rank < current_rank:
             current_draft, current_plan, current_settings = scheduled, plan, adjusted
             current_rank = new_rank
             accepted += 1
             accepted_by_phase[phase] += 1
-            if phase == "requested_visit":
+            if phase in {"requested_visit", "composition_insert"}:
                 # Another day may still need a visit. Recompute from the accepted itinerary.
                 neighbors = _neighbors(current_draft, pool, anchors, max_visits_per_day, semantic_context, requested_rules)
     if current_draft is baseline_scheduled:

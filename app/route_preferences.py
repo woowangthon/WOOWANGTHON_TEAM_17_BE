@@ -306,8 +306,8 @@ def compile_route_preferences(snapshot_doc: dict[str, Any], catalog: Any) -> dic
                     continue
                 count_rules.append({"memberRef": ref, "dimension": "meals", "tag": None,
                                     "scope": "day", "operator": "exact", "count": 3,
-                                    "required": False, "polarity": polarity})
-                warnings.append({"field": field, "code": "ATOMIC_PREFERENCE_UNSUPPORTED"})
+                                    "required": False, "polarity": polarity,
+                                    "mealPeriods": ["breakfast", "lunch", "dinner"]})
                 continue
             matcher = _matcher(atom, supported)
             if matcher and matcher[0] == "market":
@@ -482,6 +482,27 @@ def _rule_counts(draft: dict[str, Any], rule: dict[str, Any], roles: dict[int, s
                 count += n
                 known &= verified
         yield section, count, known
+
+
+def missing_visit_warnings(plan: dict[str, Any], compiled: dict[str, Any], catalog: Any) -> set[str]:
+    """Use the same public visit evidence and day/trip boundaries as quota validation."""
+    codes = {"sightseeing": "REQUESTED_ACTIVITY_UNFULFILLED", "market": "REQUESTED_ACTIVITY_UNFULFILLED",
+             "catalog_activity": "REQUESTED_ACTIVITY_UNFULFILLED", "tag_activity": "REQUESTED_ACTIVITY_UNFULFILLED",
+             "catalog_food": "REQUESTED_FOOD_UNFULFILLED", "tag_food": "REQUESTED_FOOD_UNFULFILLED"}
+    rules = [rule for rule in compiled.get("countRules", ()) if rule.get("dimension") in codes
+             and rule.get("operator") in {"min", "exact", "target"} and rule.get("count", 0) > 0]
+    if not rules:
+        return set()
+    places, facts, _ = _catalog_facts(catalog)
+    roles = {cid: place.get("planningRole") for cid, place in places.items()}
+    market_ids = _requested_market_ids(compiled, places, facts)
+    visits = {"days": [{"date": day["date"], "places": [node for node in day.get("nodes", ()) if node.get("kind") == "PLACE"]}
+                       for day in plan["days"]]}
+    warnings = set()
+    for rule in rules:
+        if any(count < rule["count"] for _, count, _ in _rule_counts(visits, rule, roles, facts, market_ids, set())):
+            warnings.add(codes[rule["dimension"]])
+    return warnings
 
 
 def apply_route_preferences(plan: dict[str, Any], compiled: dict[str, Any], catalog: Any) -> dict[str, Any]:

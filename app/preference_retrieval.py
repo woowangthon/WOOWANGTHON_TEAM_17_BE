@@ -38,6 +38,8 @@ _ATMOSPHERE_CUES = {
     "cafe": ("카페",),
 }
 _UNSAFE_SINGLE = {"강", "산", "회"}
+_MOUNTAIN_TITLE = re.compile(r"[가-힣]+산(?:\s*\([가-힣 ]+\))?")
+_HIKING_TAGS = {"등산", "트레킹등산", "등산트레킹", "산행"}
 _NON_DISH_LABELS = {"곳", "군데", "식사", "끼니", "식당", "음식", "메뉴"}
 _TRAILING = re.compile(r"(?:에가고싶어요|에가고싶어|에가고싶다|먹고싶어요|먹고싶어|먹고싶다|"
                        r"방문하고싶어요|방문하고싶어|방문하고싶다|가고싶어요|가고싶어|가고싶다|"
@@ -183,8 +185,15 @@ class PreferenceResolver:
             }
             if place.get("planningRole") in _ROLE_GROUPS["activity"]:
                 exact_type = _compact(place.get("contentTypeName"))
+                tag_keys = {_compact(tag) for tag in tags}
+                # The catalog uses the broad type 관광지 for mountains. A proper
+                # mountain name plus a hiking tag identifies the destination itself.
+                title = place.get("title")
+                mountain_name = unicodedata.normalize("NFKC", title).strip() if isinstance(title, str) else ""
+                named_mountain = (place.get("planningRole") == "sightseeing_stop"
+                                  and bool(tag_keys & _HIKING_TAGS) and _MOUNTAIN_TITLE.fullmatch(mountain_name))
                 for term in {"강", "산"}:
-                    if exact_type == term or any(_compact(tag) == term for tag in tags):
+                    if exact_type == term or term in tag_keys or (term == "산" and named_mountain):
                         short_matches.setdefault(("activity", term), []).append(cid)
             if place.get("planningRole") == "meal_stop":
                 menu_segments = _search_segments(detail.get("menuText"))

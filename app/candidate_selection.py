@@ -13,6 +13,9 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Mapping
 
+from .generation_policy import place_distance_km
+from .place_catalog import _coord as catalog_coordinate
+
 
 class CandidateSelectionError(Exception):
     """Safe internal input failure; exception text never includes caller data."""
@@ -273,7 +276,8 @@ def _role(r: Mapping[str, Any]) -> bool:
 def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog: Any,
                               review: dict[str, Any] | None = None, policy: dict[str, Any] | None = None,
                               *, confirmed_evidence: dict[str, Any] | None = None,
-                              route_preferences: dict[str, Any] | None = None) -> CandidateSelection:
+                              route_preferences: dict[str, Any] | None = None,
+                              departure_coordinate: dict[str, Any] | None = None) -> CandidateSelection:
     """Build a deterministic selection; only explicit reviewed evidence can pass required filters."""
     try:
         doc = snapshot.as_dict()
@@ -512,7 +516,25 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                 if source and isinstance(source.get("feeText" if key == "feeLabel" else key), str) and source.get("feeText" if key == "feeLabel" else key).strip():
                     item[key] = source.get("feeText" if key == "feeLabel" else key)
             pool.append(item)
-        pool.sort(key=lambda x: (-x["minimumMemberScore"], -x["groupScore"], x["contentid"]))
+        positive_roles = {r.get("dimension") for r in route_count_rules if isinstance(r, dict)
+                          and r.get("operator") in {"min", "exact", "target"}
+                          and type(r.get("count")) is int and r["count"] > 0}
+        mixed_visits = bool(positive_roles & {"meals", "tag_food", "catalog_food"}) and bool(
+            positive_roles & {"sightseeing", "market", "tag_activity", "catalog_activity"})
+        origin = None
+        if mixed_visits:
+            start_id = conditions.get("departureContentid")
+            start_row = next((row for row in places if isinstance(row, Mapping) and type(start_id) is int
+                              and row.get("contentid") == start_id), None)
+            origin = (catalog_coordinate(start_row) if start_row else None) or departure_coordinate
+        distances = ({row["contentid"]: place_distance_km({"coordinate": origin}, row)
+                      if row["coordinate"] else math.inf for row in pool} if origin else {})
+
+        def pool_key(row):
+            cid = row["contentid"]
+            return (-row["minimumMemberScore"], -row["groupScore"], distances.get(cid, 0), cid)
+
+        pool.sort(key=pool_key)
         # Explicit anchors must resolve to eligible rows and remain in the
         # bounded provider pool, even if their score ranks below the cutoff.
         eligible_by_id = {x["contentid"]: x for x in pool}
@@ -661,9 +683,12 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
             # member references to the same grounded identity do not amplify
             # its quota, and overlapping goals can share selected candidates.
             supported_dims = {"market", "catalog_food", "catalog_activity", "catalog_atmosphere"}
+            if mixed_visits:
+                supported_dims.update({"sightseeing", "meals", "tag_food", "tag_activity"})
             soft_rules = [rule for rule in route_count_rules if isinstance(rule, dict)
                           and rule.get("dimension") in supported_dims
-                          and rule.get("polarity", "prefer") == "prefer"
+                          and (rule.get("polarity", "prefer") == "prefer"
+                               or rule.get("dimension") in {"sightseeing", "meals"} and rule.get("polarity") == "limit")
                           and rule.get("operator") in {"min", "exact", "target"}
                           and rule.get("required") is not True
                           and type(rule.get("count")) is int and rule["count"] > 0]
@@ -702,10 +727,15 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                                if eligible_by_id[cid]["allowedDates"]}
                     soft_specs.append({"period": "trip", "slots": [], "options": options,
                                        "needed": remaining})
-            soft_coverage = {cid: sum(cid in spec["options"] for spec in soft_specs)
-                             for cid in candidate_ids}
-            soft_key = lambda cid: (-int(cid in soft_goal_ids), -soft_coverage.get(cid, 0), *candidate_key(cid))
-            for spec in soft_specs:
+            # Reserve scarce targets first. Once one sushi venue is retained,
+            # broad meal quotas can choose the nearest other restaurants.
+            for spec in sorted(soft_specs, key=lambda item: len(item["options"])):
+                uncovered = [item["options"] for item in soft_specs if item["options"].isdisjoint(soft_goal_ids)]
+                soft_coverage = {cid: sum(cid in options for options in uncovered) for cid in spec["options"]}
+
+                def soft_key(cid):
+                    return (-int(cid in soft_goal_ids), -soft_coverage.get(cid, 0), *pool_key(eligible_by_id[cid]))
+
                 if spec["period"] == "trip":
                     soft_goal_ids.update(sorted(spec["options"], key=soft_key)[:min(spec["needed"], maxc)])
                 else:
@@ -720,6 +750,10 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
         protected_nonmeal_count = sum(1 for cid in protected_ids
                                       if cid in eligible_by_id and eligible_by_id[cid]["planningRole"] != "meal_stop")
         meal_target = min(3 * len(day_strings), max(0, maxc - protected_nonmeal_count))
+        if mixed_visits and "sightseeing" in positive_roles and "meals" in positive_roles:
+            # Preserve enough local alternatives for three distinct services when
+            # opening times or travel rule out one of the proposed restaurants.
+            meal_target = min(6 * len(day_strings), maxc // 2, maxc - protected_nonmeal_count)
         meal_rows = [x for x in pool if x["planningRole"] == "meal_stop"]
         selected_meals = [x for x in selected.values() if x["planningRole"] == "meal_stop"]
         for meal in meal_rows:
@@ -731,7 +765,7 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                            if x["contentid"] not in protected_ids and x["planningRole"] != "meal_stop"]
             if not replaceable:
                 break
-            worst = min(replaceable, key=lambda x: (x["minimumMemberScore"], x["groupScore"], -x["contentid"]))
+            worst = max(replaceable, key=pool_key)
             del selected[worst["contentid"]]
             selected[meal["contentid"]] = meal
             selected_meals.append(meal)
@@ -739,8 +773,7 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
         # quota witnesses, and the meal floor. Surplus meals can free a slot.
         protected_ids.update(soft_goal_ids & selected.keys())
         meal_count = len(selected_meals)
-        for cid in sorted(soft_goal_ids - selected.keys(), key=lambda value: (
-                -eligible_by_id[value]["minimumMemberScore"], -eligible_by_id[value]["groupScore"], value)):
+        for cid in sorted(soft_goal_ids - selected.keys(), key=lambda value: pool_key(eligible_by_id[value])):
             incoming_is_meal = eligible_by_id[cid]["planningRole"] == "meal_stop"
             replaceable = [row for row in selected.values()
                            if row["contentid"] not in protected_ids
@@ -748,13 +781,12 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                                 or meal_count > meal_target)]
             if not replaceable:
                 continue
-            worst = min(replaceable, key=lambda row: (
-                row["minimumMemberScore"], row["groupScore"], -row["contentid"]))
+            worst = max(replaceable, key=pool_key)
             del selected[worst["contentid"]]
             meal_count += int(incoming_is_meal) - int(worst["planningRole"] == "meal_stop")
             selected[cid] = eligible_by_id[cid]
             protected_ids.add(cid)
-        candidate_public = sorted(selected.values(), key=lambda x: (-x["minimumMemberScore"], -x["groupScore"], x["contentid"]))
+        candidate_public = sorted(selected.values(), key=pool_key)
         result = {"sourceFingerprint": snapshot.fingerprint, "catalogDigest": catalog.digest,
                   "normalizationDigest": ndigest, "policyDigest": pdigest, "eligible": candidate_public,
                   "excluded": sorted(excluded, key=lambda x: (x["contentid"], x["reason"])),
@@ -875,4 +907,5 @@ def build_confirmed_candidate_selection(snapshot: Any, catalog: Any, evidence: d
     return build_candidate_selection(snapshot, None, catalog, None, policy,
                                      confirmed_evidence={**evidence, "fixedVisits": fixed,
                                                          "reviewedCommonFields": common},
-                                     route_preferences=route_preferences)
+                                     route_preferences=route_preferences,
+                                     departure_coordinate=(settings.get("departureAnchor") or {}).get("coordinate"))

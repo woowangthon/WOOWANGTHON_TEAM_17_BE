@@ -106,6 +106,19 @@ def test_short_ambiguous_terms_need_an_exact_tag_subtype_or_menu_token():
     assert "REQUIRED_PREFERENCE_UNVERIFIED" in conflict["validation"]["warnings"]
 
 
+def test_mountain_name_and_hiking_tag_identify_the_destination_itself():
+    catalog = _catalog()
+    for cid, title, role in (
+        (40, "솔바람산", "sightseeing_stop"), (41, "돌산 (괴산)", "sightseeing_stop"),
+        (42, "솔바람산 전망대", "sightseeing_stop"), (43, "클럽 별산", "activity_stop"),
+        (44, "산장식당", "meal_stop"), (45, "한빛부동산", "sightseeing_stop"),
+    ):
+        catalog.places.append({"contentid": cid, "title": title, "contentTypeName": "관광지",
+                               "planningRole": role, "overviewText": "유명한 산 근처"})
+        catalog.preferences.append({"contentid": cid, "preferenceTags": "자연|트레킹등산" if cid != 45 else "쇼핑"})
+    assert PreferenceResolver(catalog).resolve("산", "activity") == [40, 41]
+
+
 def test_activity_query_keeps_all_components_and_rejects_nearby_or_negated_mentions():
     catalog = _catalog()
     catalog.places.extend([

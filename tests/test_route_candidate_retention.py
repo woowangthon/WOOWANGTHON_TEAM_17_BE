@@ -358,6 +358,26 @@ def test_typed_food_goal_can_replace_lower_ranked_meal_at_meal_floor():
     assert [row["contentid"] for row in selection["eligible"]] == [210]
 
 
+def test_mixed_trip_retains_nearby_meals_visits_and_a_requested_dish():
+    catalog = Catalog(count=45)
+    for row in catalog.places:
+        cid = row["contentid"]
+        row["mapx"] = 127.9 if cid < 25 else 127.0 + cid / 100_000
+        if cid % 2:
+            row.update(planningRole="meal_stop", recommendationUse="MEAL")
+    snapshot = _snapshot()
+    snapshot.conditions["departureContentid"] = 40
+    rule = {"scope": "day", "operator": "target", "count": 3, "required": False, "polarity": "prefer"}
+    compiled = {"countRules": [{**rule, "dimension": "sightseeing"}, {**rule, "dimension": "meals"},
+                              {**rule, "dimension": "catalog_food", "scope": "trip", "operator": "min",
+                               "count": 1, "contentids": [1, 45]}]}
+    rows = _select(catalog, rules=compiled, max_candidates=12, snapshot=snapshot)["eligible"]
+    assert len(rows) == 12
+    assert all(row["contentid"] >= 25 for row in rows)
+    assert any(row["contentid"] == 45 for row in rows)
+    assert sum(row["planningRole"] == "meal_stop" for row in rows) == 6
+
+
 def test_typed_daily_goal_retains_distinct_ids_for_each_allowed_date():
     catalog = Catalog()
     catalog.places[209].update(planningRole="date_specific_event", recommendationUse="EVENT")

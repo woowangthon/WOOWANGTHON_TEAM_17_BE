@@ -47,7 +47,7 @@ def test_unit_label_is_not_a_generic_food_or_meal_match():
     assert compiled["issues"] == [{"field": "atomicPreferences", "code": "REQUIRED_PREFERENCE_UNSUPPORTED"}]
 
 
-def test_three_daily_meal_periods_are_a_soft_meal_count_with_scope_warning():
+def test_three_daily_meal_periods_keep_the_named_slots_with_the_soft_count():
     targets = ("\uc544\uce68 \uc810\uc2ec \uc800\ub141", "\uc544\uce68\u00b7\uc810\uc2ec\u00b7\uc800\ub141", "\uc544\uce68/\uc810\uc2ec/\uc800\ub141")
     for target in targets:
         atom = _atom(dimension="meal_plan", target=target, polarity="prefer", priority="preferred", scope="day",
@@ -56,8 +56,9 @@ def test_three_daily_meal_periods_are_a_soft_meal_count_with_scope_warning():
         assert compiled["countRules"] == [{
             "memberRef": "p1", "dimension": "meals", "tag": None, "scope": "day",
             "operator": "exact", "count": 3, "required": False, "polarity": "prefer",
+            "mealPeriods": ["breakfast", "lunch", "dinner"],
         }]
-        assert compiled["softWarnings"] == [{"field": "atomicPreferences", "code": "ATOMIC_PREFERENCE_UNSUPPORTED"}]
+        assert compiled["softWarnings"] == []
         catalog = _catalog()
         catalog.places.extend({"contentid": cid, "planningRole": "meal_stop"} for cid in (4, 5, 6))
         catalog.preferences.extend({"contentid": cid, "preferenceTags": ""} for cid in (4, 5, 6))
