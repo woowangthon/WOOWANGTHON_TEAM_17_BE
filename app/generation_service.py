@@ -346,7 +346,8 @@ class GenerationService:
         tags = list(build_supported_tags(catalog))
         fn = self.app.state.generation_normalizer
         try:
-            call = asyncio.to_thread(fn, snapshot.confirmed_preferences(), tags) if fn else asyncio.to_thread(self._default_normalizer, snapshot.confirmed_preferences(), tags)
+            provider_preferences = foundation.normalizer_input(snapshot.confirmed_preferences())
+            call = asyncio.to_thread(fn, provider_preferences, tags) if fn else asyncio.to_thread(self._default_normalizer, provider_preferences, tags)
             raw = await asyncio.wait_for(call, timeout=self.app.state.generation_normalize_timeout)
             raw = json.loads(json.dumps(raw, ensure_ascii=False, allow_nan=False))
         except asyncio.TimeoutError:
@@ -375,7 +376,8 @@ class GenerationService:
         except Exception:
             raise foundation.GenerationFoundationError("AI_UNAVAILABLE") from None
         try:
-            return normalize_confirmed_preferences(confirmed_preferences=preferences, supported_tags=tags)
+            return normalize_confirmed_preferences(
+                confirmed_preferences=foundation.normalizer_input(preferences), supported_tags=tags)
         except GeminiTimeoutError:
             raise foundation.GenerationFoundationError("AI_TIMEOUT") from None
         except GeminiUnavailableError:

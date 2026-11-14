@@ -62,7 +62,9 @@ def test_private_data_owner_isolation_and_readiness_invalidation(client, app, ca
         assert client.get(base(room) + "/preferences/me").json()["confirmation"]["status"] == "confirmed"
         assert other.get(base(room) + "/preferences/me").json()["confirmation"]["status"] == "writing"
         assert confirm(other, room, cv=1, pv=2).status_code == 200
-        assert save_conditions(client, room, 1, expectedPeople=2).status_code == 200
+        changed_conditions = save_conditions(client, room, 1, expectedPeople=3)
+        assert changed_conditions.status_code == 200, changed_conditions.text
+        assert changed_conditions.json()["conditionsVersion"] == 2
         assert all(m["preparationStatus"] == "writing" for m in client.get(base(room) + "/preparation").json()["members"])
         assert other.get(base(room) + "/preferences/me").json()["draft"]["originalText"] == private_text
         assert private_text not in caplog.text
@@ -142,16 +144,20 @@ def test_null_incomplete_draft_unicode_normalization_and_confirmation_requiremen
     incomplete = {"originalText": None, "likes": None, "avoid": None, "food": None, "walking": None}
     response = save_personal(client, room, **incomplete)
     assert response.status_code == 200, response.text
-    response = confirm(client, room)
+    preference_version = response.json()["preferenceVersion"]
+    assert preference_version == client.get(base(room) + "/preferences/me").json()["preferenceVersion"]
+    response = confirm(client, room, pv=preference_version)
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "PREFERENCES_INCOMPLETE"
     assert set(response.json()["error"]["fieldErrors"]) == {"originalText", "likes", "walking"}
-    assert save_personal(client, room, pv=1, originalText="  원문\r\n두번째 줄  ", likes=" ").status_code == 200
+    response = save_personal(client, room, pv=preference_version, originalText="  원문\r\n두번째 줄  ", likes=" ")
+    assert response.status_code == 200, response.text
+    preference_version = response.json()["preferenceVersion"]
     data = client.get(base(room) + "/preferences/me").json()
     assert data["draft"]["originalText"] == "원문\n두번째 줄"
     assert data["draft"]["likes"] is None
-    assert confirm(client, room, pv=2, reviewed=False).status_code == 400
-    response = client.post(base(room) + "/preferences/me/confirm", json={"expectedConditionsVersion": 0, "expectedPreferenceVersion": 2}, headers=headers())
+    assert confirm(client, room, pv=preference_version, reviewed=False).status_code == 400
+    response = client.post(base(room) + "/preferences/me/confirm", json={"expectedConditionsVersion": 0, "expectedPreferenceVersion": preference_version}, headers=headers())
     assert response.status_code == 400
 
 
@@ -218,6 +224,32 @@ def test_normalized_condition_and_preference_noops_preserve_versions_and_confirm
     assert same_draft.status_code == 200, same_draft.text
     assert same_draft.json()["preferenceVersion"] == 1
     assert same_draft.json()["confirmation"]["status"] == "confirmed"
+
+
+def test_required_distance_walk_fails_confirmation_without_mutating_then_pure_duration_confirms(client):
+    room = create_room(client)
+    original = "장거리 도보 거리는 2km 이하로 해 주세요. 장거리 도보는 피하고 싶어요."
+    saved = save_personal(client, room, originalText=original,
+                          avoid="장거리 도보는 피하고 싶어요", walking="20")
+    assert saved.status_code == 200, saved.text
+    before = client.get(base(room) + "/preferences/me").json()
+
+    rejected = confirm(client, room, pv=1)
+    assert rejected.status_code == 400, rejected.text
+    assert rejected.json()["error"]["code"] == "PREFERENCES_INCOMPLETE"
+    assert "walking" in rejected.json()["error"]["fieldErrors"]
+    after = client.get(base(room) + "/preferences/me").json()
+    assert after["preferenceVersion"] == before["preferenceVersion"] == 1
+    assert after["confirmation"] == before["confirmation"]
+    assert after["confirmation"]["status"] == "writing"
+
+    corrected = save_personal(client, room, pv=1,
+                              originalText="오래 걷는 것은 싫어요",
+                              avoid="오래 걷는 것은 싫어요", walking="20")
+    assert corrected.status_code == 200, corrected.text
+    confirmed = confirm(client, room, pv=2)
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["confirmation"]["status"] == "confirmed"
 
 
 @pytest.mark.parametrize("method,suffix,payload", [

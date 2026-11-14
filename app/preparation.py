@@ -261,6 +261,50 @@ def _confirmation_missing(draft: dict[str, Any], schema_version: int) -> list[st
     return missing
 
 
+def _is_stale_server_profile_echo(supplied: Any, existing: Any, current_text: Any,
+                                  requested_text: Any, conditions: dict[str, Any]) -> bool:
+    """Recognize only a byte-for-byte echo of the stored or returned profile.
+
+    The UI may mark its unchanged server profile stale as soon as source text
+    changes. Its profile facts and server identity must otherwise remain exact.
+    """
+    if not isinstance(existing, dict) or not isinstance(supplied, dict):
+        return False
+    try:
+        if set(existing) != {"schemaVersion", "sourceDigest", "status", "conditions", "unresolved"}:
+            return False
+        source_hash = existing.get("sourceDigest")
+        atoms = existing.get("conditions")
+        if (existing.get("schemaVersion") != 2 or existing.get("status") not in {"current", "stale"}
+                or not isinstance(source_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", source_hash)
+                or not isinstance(atoms, list) or len(atoms) > 80):
+            return False
+        for index, atom in enumerate(atoms, start=1):
+            if not isinstance(atom, dict) or atom.get("id") != f"ap-{source_hash[:12]}-{index:03d}":
+                return False
+        evidence_source = "\n".join(
+            [atom.get("evidence", "") for atom in atoms if isinstance(atom, dict)]
+            + [item.get("evidence", "") for item in existing.get("unresolved", []) if isinstance(item, dict)])
+        # Validate the stored profile's full schema and fact structure without
+        # treating this changed source as evidence for those facts.
+        from chungbuk_trip_ai import validate_atomic_preferences
+        validate_atomic_preferences(existing, evidence_source, conditions)
+        before = preference_profile.response_profile_status(existing, current_text, conditions)
+        after = preference_profile.response_profile_status(existing, requested_text, conditions)
+    except Exception:
+        return False
+    if not isinstance(after, dict) or after.get("status") != "stale":
+        return False
+    echoes = [existing, before]
+    # Some clients update only the status locally when their source changes.
+    for profile in tuple(echoes):
+        if isinstance(profile, dict):
+            stale_status = copy.deepcopy(profile)
+            stale_status["status"] = "stale"
+            echoes.append(stale_status)
+    return any(isinstance(profile, dict) and supplied == profile for profile in echoes)
+
+
 def _iso(value: datetime | None) -> str | None:
     return value.replace(tzinfo=None).isoformat(timespec="milliseconds") + "Z" if value else None
 
@@ -561,7 +605,17 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
                 _fail(400, "VALIDATION_ERROR", {"analysisReceipt": "해석 profile과 함께 보내 주세요."})
             if schema_version == 2 and "atomicPreferences" in draft:
                 supplied_profile = draft.get("atomicPreferences")
-                if supplied_profile is None:
+                stale_server_echo = (receipt is None and supplied_profile is not None and isinstance(current_draft, dict)
+                        and existing_profile is not None
+                        and _is_stale_server_profile_echo(
+                            supplied_profile, existing_profile, current_draft.get("originalText"),
+                            draft.get("originalText"), conditions))
+                if stale_server_echo:
+                    # Retain server-owned analysis identity while invalidating
+                    # confirmation for changed source text or common context.
+                    draft["atomicPreferences"] = preference_profile.response_profile_status(
+                        existing_profile, draft["originalText"], conditions)
+                elif supplied_profile is None:
                     draft.pop("atomicPreferences", None)
                 else:
                     trusted_profile = None

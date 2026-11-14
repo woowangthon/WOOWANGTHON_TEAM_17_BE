@@ -25,6 +25,22 @@ class GenerationFoundationError(Exception):
         super().__init__(code)
 
 
+_NORMALIZER_PREFERENCE_KEYS = (
+    "memberRef", "likes", "avoid", "avoidImportance", "food", "foodImportance", "walking",
+)
+
+
+def normalizer_input(preferences: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project private snapshots to the small schema accepted by the AI adapter.
+
+    The captured snapshot intentionally retains schedule anchors and all fields
+    needed for fingerprinting and post-provider validation. Those fields never
+    cross the normalizer boundary.
+    """
+    return [{key: preference[key] for key in _NORMALIZER_PREFERENCE_KEYS}
+            for preference in preferences]
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -188,7 +204,8 @@ def _default_normalizer(confirmed_preferences: list[dict[str, Any]], supported_t
     except Exception:
         raise GenerationFoundationError("AI_UNAVAILABLE") from None
     try:
-        return normalize_confirmed_preferences(confirmed_preferences=confirmed_preferences, supported_tags=supported_tags)
+        return normalize_confirmed_preferences(
+            confirmed_preferences=normalizer_input(confirmed_preferences), supported_tags=supported_tags)
     except Exception as exc:
         # Keep provider internals out of errors and logs; preserve only failure class.
         raise GenerationFoundationError("AI_NORMALIZATION_FAILED") from None
@@ -200,8 +217,9 @@ async def normalize_snapshot(snapshot: ConfirmedPreparationSnapshot, catalog: An
     """Run provider work without a DB connection, then reject stale captures."""
     fn = normalizer or _default_normalizer
     try:
+        provider_preferences = normalizer_input(snapshot.confirmed_preferences())
         normalized = await asyncio.wait_for(
-            asyncio.to_thread(fn, snapshot.confirmed_preferences(), list(catalog.supported_tags)),
+            asyncio.to_thread(fn, provider_preferences, list(catalog.supported_tags)),
             timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:

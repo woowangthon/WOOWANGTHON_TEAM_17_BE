@@ -6,7 +6,7 @@
 
 ## 분석과 저장
 
-`chungbuk_trip_ai.interpret_personal_draft_v2`를 Python 패키지로 호출한다. `PREFERENCE_AI_PROVIDER=ensemble`이면 Gemini와 별도의 로컬 Qwen HTTP 서비스가 같은 원문을 병렬로 분석한다. 일치하지 않는 의미는 unresolved에 남기고, 한 제공자만 응답하면 degraded를 표시한다. 합의는 정답 확률이 아니다.
+`PREFERENCE_AI_PROVIDER=ensemble`이면 BE가 `chungbuk_trip_ai.interpret_personal_draft_v2`를 호출하고, Gemini API와 로컬 Qwen 서비스가 같은 원문을 독립적으로 분석한다. 결합 코드는 원문 근거를 대조해 대상·방향·중요도·횟수·기간을 항목별로 합친다. 필요한 경우에만 Gemini가 충돌한 필드를 한 번 더 검토한다. 뜻을 결정할 수 없는 부분은 `unresolved`에 남기고, 한 제공자만 응답한 결과에는 `degraded`를 표시한다. “초밥은 먹어도 좋지만 필수는 아니에요”는 초밥에 대한 선택적 선호로 처리한다.
 
 interpret는 초안을 자동 저장하거나 확정하지 않는다. 첫 결과 저장의 최상위 `analysisReceipt`는 완료된 해석 요청의 `analysisMeta.requestId`다. 서버가 기기 세션·여행방·본인·CV/PV·원문 digest와 완료된 멱등성 cache를 대조한다. 다른 사용자의 영수증과 오래된 결과는 `409 STALE_AI_RESULT`다. 사용자가 변경한 원자는 `origin=user`로 구분한다.
 
@@ -26,9 +26,13 @@ v2 개인 GET/PUT은 선택 필드 `unresolvedAcknowledgements`를 응답 최상
 
 별도 대상이 없는 관광 방문 수는 `sightseeing_stop|culture_stop|activity_stop|shopping_stop|date_specific_event`를 센다. 식사와 숙박은 그 수에서 제외하며 식사 수는 `meal_stop`를 센다. 날짜가 지정된 예약은 기존 `scheduleItems`와 검토 앵커로 전달한다. 원자 schema v2에 개별 날짜 필드가 없어 ‘둘째 날만’ 같은 `segment` 조건을 임의로 매일 적용하지 않는다. 필요한 개별 날짜를 표현할 수 없는 필수 원자는 미지원으로 남긴다.
 
-카탈로그의 정확한 태그로 확인할 수 있는 양의 일치만 활용한다. 태그 미표시는 부재·알레르기 안전의 증거가 아니며 제목·임베딩으로 이를 증명하지 않는다. 근사 필수 횟수에 임의 허용 오차를 만들지 않는다. 도보는 확인된 `walkingSeconds`로 하루·여행 전체 누적 또는 원문에 명시된 연속 구간을 검사하며 알 수 없는 경로 시간을 0으로 바꾸지 않는다. 최적화 실패는 해당 제한 탐색의 결과이며 여행 전체의 불가능 판정이 아니다.
+음식·활동 태그 선호는 카탈로그에서 정확히 일치하는 태그로 확인한다. 태그 미표시는 부재·알레르기 안전의 증거가 아니며 제목·임베딩으로 이를 증명하지 않는다. 근사 필수 횟수에 임의 허용 오차를 만들지 않는다. 도보는 확인된 `walkingSeconds`로 하루·여행 전체 누적 또는 원문에 명시된 연속 구간을 검사하며 알 수 없는 경로 시간을 0으로 바꾸지 않는다. 최적화 실패는 해당 제한 탐색의 결과이며 여행 전체의 불가능 판정이 아니다.
+
+생성 정책 v7은 “시장에 가고 싶어요”를 여행 중 시장을 한 번 방문하는 선호로 처리한다. 쇼핑 방문지의 이름·장소 유형·태그에서 시장임을 확인한 후보 ID를 초안에 전달한다. 초안이 시장을 빠뜨리면 고정 방문과 식사를 보호하면서 가까운 후보의 시간과 이동 경로를 다시 검사한다. 기존 방에서도 저장한 취향으로 일정을 다시 생성하면 새 기준을 적용한다.
 
 ## 설치와 검증 범위
+
+2026-11-14 최종 통합 검수에서는 격리 MySQL 8.0.41에서 BE 전체 검사 613개, 학습 의존성이 설치된 환경에서 AI 검사 154개가 통과했다. 별도의 합성 여행방으로 실제 Gemini와 학습 Docker Qwen 분석, 취향 저장·확정, 일정 생성, Kakao 경로 확인, 일정 저장과 캔버스 재조회를 검증했다. 개인 정규화 API의 걷기 미입력 결과는 `maxMinutes=null, unlimited=false`였다. 운영 DB에 검수 데이터를 쓰지 않았다. 아래 수치는 각 변경 당시의 검사 이력이다.
 
 실제 모델의 방문 수 명칭 `곳|군데`는 `visit_count`와 유효한 횟수가 함께 있을 때 위 관광 방문 수로 변환한다. `meal_plan`의 `아침·점심·저녁`과 하루 3회는 선호 식사 수 목표로 전달하며, 세 시간대를 각각 채웠다는 검증은 제공하지 않아 미지원 경고를 함께 유지한다. 이 시간대 조건이 필수이면 미지원으로 처리한다. 단일 아침 요청을 모든 식사 수 조건으로 일반화하지 않는다. 이 변환 변경은 `atomic-route-v2`와 생성 정책 v6에 반영해 이전 정책의 계획을 재사용하지 않는다.
 
@@ -37,5 +41,7 @@ v2 개인 GET/PUT은 선택 필드 `unresolvedAcknowledgements`를 응답 최상
 2026-11-14 경로 인수 연결은 최신 경로 알고리즘 main `1be929e`와 기존 v2 개인 검토 작업을 함께 검사했다. BE non-MySQL pytest 426개, AI pytest 127개와 87 subtests를 통과했다. BE MySQL 177개는 선택에서 제외했고 AI 학습 의존성 검사 2개는 skip했다. 필수 횟수의 후보 보존·날짜별 고유 후보 배정·반복 예약·알 수 없는 태그/도보·최적화 위험·저장 전 거부 및 기존 v1 동작을 합성 자료와 모의 provider로 확인했다. 독립 코드 검토의 중요 지적을 수정하고 관련 회귀 검사를 추가했다. 실제 Gemini·Docker Qwen·Kakao·운영 MySQL을 함께 쓰는 인수는 이 변경에서 실행하지 않았다.
 
 BE 실행 환경에 이 기능의 AI 저장소를 editable 설치하고, 별도 서비스의 `QWEN_PREFERENCE_URL`과 서버의 Gemini key를 개인 환경변수로 설정한다. 키를 FE나 Git에 넣지 않는다. AI의 공식 기반 모델·학습 adapter·검증 manifest가 필요하다. 단순 IP나 컨테이너 ID로 학습 모델이 전달되지 않는다.
+
+PyCharm에서 여러 AI 체크아웃을 함께 열면 Sources Root로 지정한 복사본이 가상환경에 설치한 패키지보다 먼저 로드될 수 있다. 예전 체크아웃의 Sources Root 지정을 해제하고, BE 가상환경을 선택한 `run.py` 실행 구성으로 시작한다. 같은 실행 구성에서 `from chungbuk_trip_ai import interpret_personal_draft_v2`와 `inspect.getfile(interpret_personal_draft_v2)` (`import inspect`)로 실제 함수가 설치한 AI 체크아웃에 있는지 확인할 수 있다.
 
 이번 변경은 기존 draft_json을 사용하며 신규 DDL·migration이 없다. 비 MySQL pytest 229개, 별도 SQLite 실제 HTTP 저장·영수증·확정·stale 검사와 독립 코드 검토를 통과했다. 운영 DB는 테스트/초기화하지 않았다. Docker/WSL 장애로 전용 MySQL 통합 177개는 실행하지 않았다. UI 검수와 실제 모델 비교 결과는 AI 저장소 보고서에 따로 기록한다.

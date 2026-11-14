@@ -1,7 +1,7 @@
 import pytest
 
 from app.generation_reviews import bind_private_review, normalization_dto, validate_review
-from preparation_helpers import base, create_room, headers
+from preparation_helpers import base, create_room, headers, save_conditions
 
 
 def _stored():
@@ -71,10 +71,16 @@ def test_normalizer_classifies_public_provider_errors_without_details(monkeypatc
 
 
 @pytest.mark.mysql
-def test_generation_job_requires_all_current_private_reviews(client):
+def test_empty_room_conditions_and_unconfirmed_owner_are_reported_separately(client):
     room = create_room(client)
+    empty = client.get(base(room) + "/preparation").json()
+    assert "CONDITIONS_INCOMPLETE" in {reason["code"] for reason in empty["readiness"]["reasons"]}
+    assert save_conditions(client, room).status_code == 200
+    unprepared = client.get(base(room) + "/generation/preferences/me")
+    assert unprepared.status_code == 409
+    assert unprepared.json()["error"]["code"] == "PREFERENCES_UNCONFIRMED"
     state = client.get(base(room) + "/generation").json()
     response = client.post(base(room) + "/generation/jobs", headers=headers(), json={
         "expectedInputToken": state["inputToken"], "expectedSettingsVersion": state["settingsVersion"]})
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "REVIEW_REQUIRED"
+    assert response.json()["error"]["code"] == "PREFERENCES_UNCONFIRMED"

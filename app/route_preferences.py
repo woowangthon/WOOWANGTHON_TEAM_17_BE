@@ -12,11 +12,71 @@ import math
 import re
 from typing import Any
 
-from .confirmed_preferences import ALIASES, analyze_preferences
+from .confirmed_preferences import ALIASES, NEGATIVE, _clauses, analyze_preferences
 
 POLICY_VERSION = "atomic-route-v2"
 _TOURISM = {"sightseeing_stop", "culture_stop", "activity_stop", "shopping_stop", "date_specific_event"}
 _LODGING = {"overnight_lodging", "overnight_camping"}
+_MARKET_DIMENSIONS = {"activity", "place", "venue", "category", "place_type", "visit_count", "other"}
+_MARKET_TERMS = {"시장", "전통시장", "재래시장", "장터"}
+_LEGACY_MARKET_WISHES = {"시장", "전통시장", "재래시장", "장터",
+                         "시장에가고싶어요", "전통시장에가고싶어요", "재래시장에가고싶어요",
+                         "장터에가고싶어요", "시장방문하고싶어요", "전통시장방문하고싶어요",
+                         "재래시장방문하고싶어요", "장터방문하고싶어요"}
+
+
+def _compact_korean(value: Any) -> str:
+    return re.sub(r"\s+", "", value).casefold() if isinstance(value, str) else ""
+
+
+def _market_target(atom: dict[str, Any]) -> bool:
+    if atom.get("dimension") not in _MARKET_DIMENSIONS:
+        return False
+    target = _compact_korean(atom.get("target")).rstrip(".!?")
+    return bool(re.fullmatch(
+        r"(?:전통시장|재래시장|시장|장터)(?:에|을|를|에서)?"
+        r"(?:방문|구경|가기|가고싶어요|가고싶어|가고싶다|방문하고싶어요|"
+        r"방문하고싶어|방문하고싶다|구경하고싶어요|구경하고싶어|구경하고싶다)?",
+        target))
+
+
+def _legacy_market_wish(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    if re.search(r"(?:\b(?:or|either)\b|이나|또는|혹은|아니면)", value, re.I):
+        return False
+    clauses = _clauses(value)
+    if any(NEGATIVE.search(clause) and any(term in _compact_korean(clause) for term in _MARKET_TERMS)
+           for clause in clauses):
+        return False
+    return any(not NEGATIVE.search(clause)
+               and _compact_korean(clause).rstrip(".!?") in _LEGACY_MARKET_WISHES for clause in clauses)
+
+
+def is_market_place(place: dict[str, Any], tags: set[str] | None = None) -> bool:
+    """Ground a market match only in a shopping role plus a specific market fact."""
+    if (place.get("planningRole") != "shopping_stop"
+            or place.get("recommendationUse") not in {"GENERAL_SHOPPING", "SPECIAL_SHOPPING"}):
+        return False
+    title = _compact_korean(place.get("title"))
+    if title.endswith("전시장") and not title.endswith("역전시장"):
+        return False
+    title_match = any(title.endswith(term) for term in _MARKET_TERMS)
+    type_match = _compact_korean(place.get("contentTypeName")) in _MARKET_TERMS
+    tag_match = bool(tags and tags & _MARKET_TERMS)
+    return title_match or type_match or tag_match
+
+
+def _requested_market_ids(compiled, places, facts):
+    if any(rule.get("dimension") == "market" for rule in compiled.get("countRules", [])):
+        return {cid for cid, place in places.items() if is_market_place(place, facts.get(cid))}
+    return set()
+
+
+def _market_unknown_ids(places: dict[int, dict[str, Any]], market_ids: set[int]) -> set[int]:
+    return {cid for cid, place in places.items() if cid not in market_ids
+            and place.get("planningRole") == "shopping_stop"
+            and place.get("recommendationUse") in {"GENERAL_SHOPPING", "SPECIAL_SHOPPING"}}
 
 
 def _digest(doc: dict[str, Any]) -> str:
@@ -84,6 +144,8 @@ def _matcher(atom: dict[str, Any], vocabulary: set[str]) -> tuple[str, str | Non
         "meal", "meals", "meal_stop",
     }:
         return "meals", None
+    if _market_target(atom):
+        return "market", None
     tag = target if target in vocabulary else next(
         (name for name, aliases in ALIASES.items() if name in vocabulary and target in aliases), None)
     if tag is None:
@@ -193,6 +255,22 @@ def compile_route_preferences(snapshot_doc: dict[str, Any], catalog: Any) -> dic
                 warnings.append({"field": field, "code": "ATOMIC_PREFERENCE_UNSUPPORTED"})
                 continue
             matcher = _matcher(atom, supported)
+            if matcher and matcher[0] == "market":
+                if polarity != "prefer":
+                    (issues if hard else warnings).append({"field": field, "code": "REQUIRED_PREFERENCE_UNSUPPORTED" if hard else "ATOMIC_PREFERENCE_UNSUPPORTED"})
+                    continue
+                if hard and scope is None and frequency is None:
+                    issues.append({"field": field, "code": "REQUIRED_PREFERENCE_UNSUPPORTED"})
+                    continue
+                if frequency is None:
+                    frequency = {"operator": "min", "count": 1, "period": scope or "trip"}
+                if hard and (approximate or frequency["operator"] in {"target", "max", "exact"}):
+                    issues.append({"field": field, "code": "REQUIRED_PREFERENCE_UNSUPPORTED"})
+                    continue
+                count_rules.append({"memberRef": ref, "dimension": "market", "tag": None,
+                                    "scope": frequency["period"], "operator": frequency["operator"],
+                                    "count": frequency["count"], "required": hard, "polarity": "prefer"})
+                continue
             unsupported = (matcher is None or (hard and (approximate or dimension == "accessibility"
                            or scope is None or frequency is not None and frequency["operator"] == "target")))
             if unsupported:
@@ -210,6 +288,17 @@ def compile_route_preferences(snapshot_doc: dict[str, Any], catalog: Any) -> dic
                                    "scope": "meal" if dimension == "food" else "all", "required": False})
             else:
                 (issues if hard else warnings).append({"field": field, "code": "REQUIRED_PREFERENCE_UNSUPPORTED" if hard else "ATOMIC_PREFERENCE_UNSUPPORTED"})
+    # A small exact allowlist keeps legacy v1 market wishes grounded without
+    # reinterpreting broad shopping text or recovering discarded source text.
+    legacy_preferences = snapshot_doc.get("confirmedPreferences", []) if isinstance(snapshot_doc, dict) else []
+    if isinstance(legacy_preferences, list):
+        for pref in legacy_preferences:
+            if (not isinstance(pref, dict) or pref.get("memberRef") in atomic_refs
+                    or not _legacy_market_wish(pref.get("likes"))):
+                continue
+            count_rules.append({"memberRef": pref["memberRef"], "dimension": "market", "tag": None,
+                                "scope": "trip", "operator": "min", "count": 1,
+                                "required": False, "polarity": "prefer"})
     # Unresolved notes are intentionally reduced to generic codes.
     for item in group.get("unresolved", []) if isinstance(group.get("unresolved"), list) else []:
         if isinstance(item, dict) and item.get("memberRef") in atomic_refs:
@@ -241,13 +330,19 @@ def combine_confirmed_evidence(preferences: list[dict[str, Any]], tags: Any, com
     return evidence
 
 
-def _place_count(place: dict[str, Any], rule: dict[str, Any], roles: dict[int, str], tag_facts: dict[int, set[str] | None]) -> tuple[int, bool]:
+def _place_count(place: dict[str, Any], rule: dict[str, Any], roles: dict[int, str],
+                 tag_facts: dict[int, set[str] | None], market_ids: set[int],
+                 market_unknown_ids: set[int]) -> tuple[int, bool]:
     cid = place.get("contentid")
     role = roles.get(cid, place.get("planningRole"))
     if role in _LODGING:
         return 0, True
     if rule.get("dimension") == "meals":
         return (1, True) if role == "meal_stop" else (0, True)
+    if rule.get("dimension") == "market":
+        if cid in market_ids:
+            return 1, True
+        return 0, not (rule.get("required") and cid in market_unknown_ids)
     if rule.get("dimension") == "sightseeing":
         return (1, True) if role in _TOURISM else (0, True)
     if rule.get("dimension") == "tag_food" and role != "meal_stop":
@@ -263,14 +358,16 @@ def _place_count(place: dict[str, Any], rule: dict[str, Any], roles: dict[int, s
     return int(present), present
 
 
-def _rule_counts(draft: dict[str, Any], rule: dict[str, Any], roles: dict[int, str], tag_facts: dict[int, set[str] | None]):
+def _rule_counts(draft: dict[str, Any], rule: dict[str, Any], roles: dict[int, str],
+                 tag_facts: dict[int, set[str] | None], market_ids: set[int],
+                 market_unknown_ids: set[int]):
     days = draft.get("days", [])
     sections = [[day] for day in days] if rule.get("scope") == "day" else [days]
     for section in sections:
         count, known = 0, True
         for day in section:
             for place in day.get("places", []):
-                n, verified = _place_count(place, rule, roles, tag_facts)
+                n, verified = _place_count(place, rule, roles, tag_facts, market_ids, market_unknown_ids)
                 count += n
                 known &= verified
         yield section, count, known
@@ -286,6 +383,9 @@ def apply_route_preferences(plan: dict[str, Any], compiled: dict[str, Any], cata
                       for d in result.get("days", [])]}
     places, tag_facts, _ = _catalog_facts(catalog)
     roles = {cid: row.get("planningRole") for cid, row in places.items()}
+    market_ids = _requested_market_ids(compiled, places, tag_facts)
+    hard_market = any(rule.get("required") and rule.get("dimension") == "market" for rule in compiled.get("countRules", []))
+    market_unknown_ids = _market_unknown_ids(places, market_ids) if hard_market else set()
     unresolved_hard = False
     for issue in compiled.get("issues", []):
         code = issue.get("code")
@@ -296,7 +396,7 @@ def apply_route_preferences(plan: dict[str, Any], compiled: dict[str, Any], cata
     for rule in compiled.get("countRules", []):
         if not rule.get("required"):
             continue
-        for section, count, known in _rule_counts(draft, rule, roles, tag_facts):
+        for section, count, known in _rule_counts(draft, rule, roles, tag_facts, market_ids, market_unknown_ids):
             op, target = rule["operator"], rule["count"]
             violated = count < target if op == "min" else count > target if op == "max" else count != target
             exceeded = op in {"max", "exact"} and count > target
@@ -333,27 +433,35 @@ def apply_route_preferences(plan: dict[str, Any], compiled: dict[str, Any], cata
     return result
 
 
-def route_preference_penalty(draft: dict[str, Any], compiled: dict[str, Any], catalog: Any) -> float:
-    """Nonnegative soft deviation penalty; unknown exact facts are not inferred."""
+def route_preference_cost(draft: dict[str, Any], compiled: dict[str, Any], catalog: Any) -> tuple[int, float]:
+    """Count unverified soft goals separately so independently known deviations can still be ranked."""
     places, facts, _ = _catalog_facts(catalog)
     roles = {cid: row.get("planningRole") for cid, row in places.items()}
+    market_ids = _requested_market_ids(compiled, places, facts)
     draft = {"days": [{**day, "places": day.get("places", [node for node in day.get("nodes", [])
                                                            if node.get("kind") == "PLACE"])}
                       for day in draft.get("days", [])]}
     penalty = 0.0
+    unverified = 0
+    seen_market_rules = set()
     for rule in compiled.get("countRules", []):
+        if rule.get("dimension") == "market":
+            identity = (rule.get("scope"), rule.get("operator"), rule.get("count"),
+                       rule.get("required"), rule.get("polarity"))
+            if identity in seen_market_rules:
+                continue
+            seen_market_rules.add(identity)
         if rule.get("required"):
             continue
-        for _section, count, known in _rule_counts(draft, rule, roles, facts):
+        for _section, count, known in _rule_counts(draft, rule, roles, facts, market_ids, set()):
             target = rule["count"]
             if not known and not (rule["operator"] == "min" and count >= target):
-                return float("inf")
+                unverified += 1
+                continue
             if rule["operator"] == "min":
                 penalty += max(0, target - count)
             elif rule["operator"] == "max":
                 penalty += max(0, count - target)
-            elif rule["operator"] == "target":
-                penalty += abs(count - target)
             else:
                 penalty += abs(count - target)
     for rule in compiled.get("walkingRules", []):
@@ -364,21 +472,31 @@ def route_preference_penalty(draft: dict[str, Any], compiled: dict[str, Any], ca
         for section in sections:
             walks, known = _walking_seconds(section)
             if not known:
-                return float("inf")
+                unverified += 1
+                continue
             if rule.get("scope") == "explicit_segment":
                 penalty += sum(max(0, value - rule["seconds"]) for value in walks) / 60
             else:
                 penalty += max(0, sum(walks) - rule["seconds"]) / 60
-    return float(penalty)
+    return unverified, penalty
+
+
+def route_preference_penalty(draft: dict[str, Any], compiled: dict[str, Any], catalog: Any) -> float:
+    """Scalar callers cannot treat an unverified goal as satisfied."""
+    unverified, penalty = route_preference_cost(draft, compiled, catalog)
+    return float("inf") if unverified else penalty
 
 
 def draft_preference_rules(compiled: dict[str, Any], catalog: Any, candidate_ids: list[int]) -> list[dict[str, Any]]:
     """Resolve bounded count rules to eligible IDs for the draft prompt."""
     places, facts, _ = _catalog_facts(catalog)
+    market_ids = _requested_market_ids(compiled, places, facts)
     allowed = {cid for cid in candidate_ids if type(cid) is int}
     rules = []
     for rule in compiled.get("countRules", []):
-        if rule.get("dimension") == "sightseeing":
+        if rule.get("dimension") == "market":
+            ids = [cid for cid in sorted(allowed) if cid in places and cid in market_ids]
+        elif rule.get("dimension") == "sightseeing":
             ids = [cid for cid in sorted(allowed) if cid in places and places[cid].get("planningRole") in _TOURISM]
         elif rule.get("dimension") == "meals":
             ids = [cid for cid in sorted(allowed) if cid in places and places[cid].get("planningRole") == "meal_stop"]

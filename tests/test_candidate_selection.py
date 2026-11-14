@@ -6,6 +6,7 @@ import pytest
 
 from app.candidate_selection import (
     CandidateSelectionError,
+    _normalization,
     _tokens_region,
     build_candidate_selection,
     build_supported_tags,
@@ -30,6 +31,18 @@ class Catalog:
         self.places = places
         self.details = details or []
         self.preferences = preferences or []
+
+
+@pytest.mark.parametrize(("walking", "max_minutes", "unlimited"), [
+    (None, None, False), ("unlimited", None, True),
+])
+def test_normalization_distinguishes_unspecified_walking_from_unlimited(walking, max_minutes, unlimited):
+    prefs = [{"memberRef": "p1", "likes": None, "avoid": None, "avoidImportance": "required",
+              "food": None, "foodImportance": "preferred", "walking": walking}]
+    normalized_result = {"terms": [], "unmapped": [], "walking": [
+        {"memberRef": "p1", "scope": "between_places", "maxMinutes": max_minutes, "unlimited": unlimited}],
+        "conflictCandidates": [], "needsReview": walking is None}
+    assert _normalization(normalized_result, prefs, set()) == ([], [])
 
 
 def source(*, avoid="무서운 놀이", region="청주시", lodging=None, fixed=None):

@@ -74,15 +74,23 @@ def response_profile_status(profile: Any, original_text: str | None, conditions:
         result = copy.deepcopy(profile)
         if isinstance(result, dict): result["status"] = "stale"
         return result
-    _, source_digest, validate, mark_stale = functions
+    _, source_digest, validate, _ = functions
+    if not isinstance(profile, dict):
+        return copy.deepcopy(profile)
+    expected_digest = source_digest(original_text, conditions)
+    # A stale profile is a record of an earlier analysis. Rebuilding it against
+    # changed inputs would give old evidence a new digest and fresh-looking IDs.
+    # Canonicalize only while its original source still matches.
+    if profile.get("status") != "current" or profile.get("sourceDigest") != expected_digest:
+        result = copy.deepcopy(profile)
+        if isinstance(result, dict): result["status"] = "stale"
+        return result
     try:
         result = validate(profile, original_text, conditions)
     except Exception:
         result = copy.deepcopy(profile)
         if isinstance(result, dict): result["status"] = "stale"
         return result
-    if profile.get("status") != "current" or profile.get("sourceDigest") != source_digest(original_text, conditions):
-        result = mark_stale(result)
     return result
 
 

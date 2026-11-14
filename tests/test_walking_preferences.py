@@ -40,6 +40,15 @@ def test_mixed_walking_and_other_avoid_is_not_erased_or_claimed_as_supported():
                for item in analysis["issues"])
 
 
+def test_distance_based_long_walk_avoid_stays_unsupported_and_preserved():
+    draft = {"memberRef": "p1", "originalText": "장거리 도보 거리는 2km 이하로 해 주세요.",
+             "likes": None, "avoid": "장거리 도보는 피하고 싶어요", "avoidImportance": "required",
+             "food": None, "foodImportance": "preferred", "walking": "20"}
+    result = resolve_walking_preference(draft)
+    assert result["remainingAvoid"] == draft["avoid"]
+    assert result["issue"] == "unsupportedScope"
+
+
 def test_candidate_pipeline_accepts_only_after_walking_clause_is_satisfied():
     from dataclasses import dataclass
     from app.candidate_selection import build_confirmed_candidate_selection

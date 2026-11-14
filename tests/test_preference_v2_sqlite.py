@@ -112,15 +112,110 @@ def test_v2_http_sql_analysis_receipt_confirm_and_changed_common_conditions(pers
         json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 2, "reviewed": True})
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["confirmation"]["status"] == "confirmed"
+    reviewed_profile = saved.json()["draft"]["atomicPreferences"]
     with engine.begin() as conn:
         changed = {**validate_conditions(CONDITIONS), "startDate": "2026-12-13", "endDate": "2026-12-14"}
         conn.execute(text("UPDATE trip_preparation_documents SET conditions_json=:j,conditions_version=2"), {"j": json.dumps(changed)})
-    stale = client.get(path, headers=headers).json()["draft"]["atomicPreferences"]
+    stale_doc = client.get(path, headers=headers).json()["draft"]
+    stale = stale_doc["atomicPreferences"]
     assert stale["status"] == "stale"
+    assert stale["sourceDigest"] == reviewed_profile["sourceDigest"]
+    assert [a["id"] for a in stale["conditions"]] == [a["id"] for a in reviewed_profile["conditions"]]
+    echoed = client.put(path, headers=headers, json={"expectedConditionsVersion": 2,
+        "expectedPreferenceVersion": 2, "draft": stale_doc})
+    assert echoed.status_code == 200, echoed.text
+    assert echoed.json()["preferenceVersion"] == 3
+    assert echoed.json()["draft"]["atomicPreferences"]["sourceDigest"] == reviewed_profile["sourceDigest"]
+    assert [a["id"] for a in echoed.json()["draft"]["atomicPreferences"]["conditions"]] == [a["id"] for a in reviewed_profile["conditions"]]
     direct_confirm = client.post(path + "/confirm", headers=headers,
-        json={"expectedConditionsVersion": 2, "expectedPreferenceVersion": 2, "reviewed": True})
+        json={"expectedConditionsVersion": 2, "expectedPreferenceVersion": 3, "reviewed": True})
     assert direct_confirm.status_code == 400, direct_confirm.text
     assert "atomicPreferences" in direct_confirm.json()["fieldErrors"]
+
+
+@pytest.mark.parametrize("source_mode", ["replace", "append"])
+@pytest.mark.parametrize("profile_mode", ["omitted", "stored_echo", "ui_stale_echo"])
+def test_source_change_accepts_only_server_profile_echo_as_stale_and_clears_ack(personal_v2, profile_mode, source_mode):
+    client, engine, trip, original = personal_v2
+    path = f"/api/v1/trips/{trip}/preferences/me"
+    headers = {"X-Preference-Schema": "2"}
+    initial = {"originalText": original, "likes": None, "avoid": None, "avoidImportance": "preferred",
+               "food": None, "foodImportance": "preferred", "walking": None, "scheduleItems": []}
+    assert client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 0, "draft": initial}).status_code == 200
+    receipt = str(uuid.uuid4())
+    analyzed = client.post(path + "/interpret", headers={**headers, "Idempotency-Key": receipt},
+        json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 1})
+    assert analyzed.status_code == 200, analyzed.text
+    current = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 1, "analysisReceipt": receipt,
+        "draft": {"originalText": original, **analyzed.json()["suggestions"]}})
+    assert current.status_code == 200, current.text
+    profile = current.json()["draft"]["atomicPreferences"]
+    ack = {"sourceDigest": profile["sourceDigest"], "items": []}
+    acknowledged = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 2, "draft": current.json()["draft"], "unresolvedAcknowledgements": ack})
+    assert acknowledged.status_code == 200, acknowledged.text
+    assert acknowledged.json()["preferenceVersion"] == 3
+    assert client.post(path + "/confirm", headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 3, "reviewed": True}).status_code == 200
+
+    changed = copy.deepcopy(acknowledged.json()["draft"])
+    changed["originalText"] = ("새 원문에는 이전 근거가 전혀 없습니다." if source_mode == "replace"
+                                else original + "\n새 원문을 뒤에 덧붙였습니다.")
+    if profile_mode == "omitted":
+        changed.pop("atomicPreferences")
+    elif profile_mode == "ui_stale_echo":
+        changed["atomicPreferences"]["status"] = "stale"
+    saved = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 3, "draft": changed})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["preferenceVersion"] == 4
+    stale = saved.json()["draft"]["atomicPreferences"]
+    assert stale["status"] == "stale"
+    assert stale["sourceDigest"] == profile["sourceDigest"]
+    assert [a["id"] for a in stale["conditions"]] == [a["id"] for a in profile["conditions"]]
+    assert saved.json()["confirmation"]["status"] == "writing"
+    assert "unresolvedAcknowledgements" not in saved.json()
+    with engine.connect() as conn:
+        stored = json.loads(conn.execute(text("SELECT draft_json FROM member_preparation_documents WHERE trip_id=:t"), {"t": trip}).scalar_one())
+    assert "_unresolvedAcknowledgements" not in stored
+    retry = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 4, "draft": saved.json()["draft"]})
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["preferenceVersion"] == 4
+
+
+def test_stale_profile_echo_does_not_accept_forged_evidence(personal_v2):
+    client, _engine, trip, original = personal_v2
+    path = f"/api/v1/trips/{trip}/preferences/me"
+    headers = {"X-Preference-Schema": "2"}
+    initial = {"originalText": original, "likes": None, "avoid": None, "avoidImportance": "preferred",
+               "food": None, "foodImportance": "preferred", "walking": None, "scheduleItems": []}
+    client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 0, "draft": initial})
+    receipt = str(uuid.uuid4())
+    result = client.post(path + "/interpret", headers={**headers, "Idempotency-Key": receipt},
+        json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 1}).json()
+    saved = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 1, "analysisReceipt": receipt,
+        "draft": {"originalText": original, **result["suggestions"]}})
+    forged = copy.deepcopy(saved.json()["draft"])
+    forged["originalText"] = "새 원문"
+    forged["atomicPreferences"]["conditions"][0]["evidence"] = "조작된 근거"
+    rejected = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 2, "draft": forged})
+    assert rejected.status_code == 400
+    current = client.get(path, headers=headers).json()
+    assert current["preferenceVersion"] == 2
+    assert current["draft"]["originalText"] == original
+    retry_body = copy.deepcopy(saved.json()["draft"])
+    retry_body["originalText"] = "새 원문에는 이전 근거가 전혀 없습니다."
+    retried = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 2, "draft": retry_body})
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["preferenceVersion"] == 3
+    assert retried.json()["draft"]["atomicPreferences"]["status"] == "stale"
 
 
 def test_v2_manual_atomic_correction_updates_legacy_and_legacy_only_edit_cannot_recertify_old_atoms(personal_v2):

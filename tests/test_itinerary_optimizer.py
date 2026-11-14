@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
 from app.itinerary_optimizer import optimize_itinerary
 
 
@@ -97,6 +99,50 @@ def test_candidate_replacement_filters_eligible_rows_before_capping():
     result, _plan, _settings, report = optimize_itinerary(original, {}, pool, evaluate)
     assert result["days"][0]["places"][0]["contentid"] == 25
     assert report["acceptedMovesByPhase"]["candidate_replace"] >= 1
+
+
+@pytest.mark.parametrize("unsafe", [False, True])
+@pytest.mark.parametrize("unverified_walk", [False, True])
+def test_missing_market_gets_a_feasibility_trial_before_generic_candidates(unsafe, unverified_walk, monkeypatch):
+    from types import SimpleNamespace
+    from app import place_semantics
+    from app.route_preferences import compile_route_preferences
+
+    tomorrow = "2026-12-13"
+    places = [{"contentid": cid, "planningRole": "sightseeing_stop",
+               "title": f"공원 {cid}", "recommendationUse": "MAIN_DESTINATION"} for cid in range(1, 41)]
+    places[0].update(planningRole="meal_stop", recommendationUse="MEAL")
+    places[39].update(title="사창시장", planningRole="shopping_stop", recommendationUse="SPECIAL_SHOPPING")
+    catalog = SimpleNamespace(places=places, preferences=[])
+    atom = {"dimension": "activity", "target": "시장", "polarity": "prefer", "priority": "preferred",
+            "scope": "trip", "memberReferences": ["p1"], "supportType": "soft"}
+    wishes = [atom]
+    if unverified_walk:
+        wishes.append({**atom, "dimension": "walking", "target": "도보", "polarity": "limit",
+                       "value": 20, "unit": "분"})
+    prefs = compile_route_preferences({"atomicMemberRefs": ["p1"], "groupConditions": {"softSupport": wishes}}, catalog)
+    assert bool(prefs["walkingRules"]) == unverified_walk
+    pool = [{**p, "selectionRank": i, "allowedDates": [DAY, tomorrow]} for i, p in enumerate(places)]
+    pool[-1]["allowedDates"] = [tomorrow]
+    initial = {"days": [{"date": DAY, "places": [{"contentid": 2}]},
+                        {"date": tomorrow, "places": [{"contentid": 1}, {"contentid": 3}, {"contentid": 4}]}]}
+    settings = {"confirmedScheduleAnchors": [{"date": tomorrow, "contentid": 3, "position": 1}]}
+    monkeypatch.setattr(place_semantics, "mmr_order", lambda rows, *args, **kwargs: rows[:8])
+    attempts = []
+
+    def evaluate(value):
+        daily_ids = [[p["contentid"] for p in day["places"]] for day in value["days"]]
+        attempts.append(daily_ids)
+        plan_days = [{"date": day["date"], "nodes": [{"kind": "PLACE", **p} for p in day["places"]],
+                      "edges": []} for day in value["days"]]
+        warnings = ["ROUTE_UNAVAILABLE"] if unsafe and 40 in daily_ids[1] else []
+        return value, {"days": plan_days, "validation": {"warnings": warnings, "violations": []}}, settings
+
+    result, _, _, _ = optimize_itinerary(initial, settings, pool, evaluate, max_evaluations=1,
+                                         route_preferences=prefs, catalog=catalog,
+                                         semantic_context=SimpleNamespace(enabled=True))
+    assert attempts == [[[2], [1, 3, 4]], [[2], [1, 3, 40]]]
+    assert [p["contentid"] for p in result["days"][1]["places"]] == [1, 3, 4 if unsafe else 40]
 
 
 def test_unknown_route_cost_is_not_imputed_as_zero():

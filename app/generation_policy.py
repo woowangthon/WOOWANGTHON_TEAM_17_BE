@@ -1,11 +1,29 @@
 """Shared deterministic generation-policy primitives."""
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping
 
 
-GENERATION_POLICY_VERSION = "atomic-route-soft-meals-alns-mmr-car40-v6"
+GENERATION_POLICY_VERSION = "atomic-route-market-v7"
 CAR_LEG_MAX_SECONDS = 40 * 60
+
+
+def place_distance_km(a: dict[str, Any], b: dict[str, Any]) -> float:
+    """Straight-line distance for ordering trials; feasibility always uses routed legs."""
+    ca, cb = a.get("coordinate"), b.get("coordinate")
+    if not isinstance(ca, dict) or not isinstance(cb, dict):
+        return 30.0
+    try:
+        lat1, lon1 = math.radians(float(ca["latitude"])), math.radians(float(ca["longitude"]))
+        lat2, lon2 = math.radians(float(cb["latitude"])), math.radians(float(cb["longitude"]))
+        if not all(math.isfinite(x) for x in (lat1, lon1, lat2, lon2)):
+            return 30.0
+        dlat, dlon = lat2 - lat1, lon2 - lon1
+        h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        return 6371.0 * 2 * math.asin(min(1.0, math.sqrt(max(0.0, h))))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return 30.0
 
 
 def car_leg_exceeds_limit(mode: Any, duration_seconds: Any, *, from_kind: Any, to_kind: Any) -> bool:

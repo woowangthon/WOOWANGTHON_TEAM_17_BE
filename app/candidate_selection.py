@@ -232,7 +232,9 @@ def _normalization(value: Any, prefs: list[dict[str, Any]], supported: set[str])
         raise CandidateSelectionError("INVALID_NORMALIZATION_RESULT")
     # Walking output is not proof of travel feasibility; it must faithfully echo
     # the confirmed member limit and have the adapter's known shape.
-    expected = [{"memberRef": p["memberRef"], "scope": "between_places", "maxMinutes": None if p["walking"] == "unlimited" else int(p["walking"]), "unlimited": p["walking"] == "unlimited"} for p in prefs]
+    expected = [{"memberRef": p["memberRef"], "scope": "between_places",
+                 "maxMinutes": None if p["walking"] in (None, "unlimited") else int(p["walking"]),
+                 "unlimited": p["walking"] == "unlimited"} for p in prefs]
     if (len(value["walking"]) != len(expected)
             or any(not isinstance(item, dict) or set(item) != {"memberRef", "scope", "maxMinutes", "unlimited"}
                    or not isinstance(item.get("memberRef"), str) or item.get("scope") != "between_places"
@@ -336,6 +338,13 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                     if (p["memberRef"], fld, text) in required_fields:
                         unresolved.append("REQUIRED_TERM_REVIEW_REQUIRED")
         predicates = [] if confirmed_evidence is None else [dict(x) for x in confirmed_evidence.get("predicates", [])]
+        route_count_rules = route_preferences.get("countRules", []) if isinstance(route_preferences, dict) else []
+        market_rules = [rule for rule in route_count_rules
+                        if isinstance(rule, dict)
+                        and rule.get("dimension") == "market" and rule.get("polarity") == "prefer"
+                        and rule.get("operator") in {"min", "exact", "target"}
+                        and type(rule.get("count")) is int and rule["count"] > 0]
+        market_match_ids: set[int] = set()
         for i in accepted:
             t = terms[i]
             rf = next((x for x in reviewed_fields if x["memberRef"] == t["memberRef"] and x["field"] == t["field"] and i in x["termIndexes"]), None)
@@ -482,6 +491,10 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                     unknown_terms.append({"memberRef": pred["memberRef"], "tag": pred["tag"], "polarity": pred["polarity"], "scope": pred["scope"]})
                 score = 1 if pred["polarity"] == "prefer" and present else -1 if pred["polarity"] == "avoid" and present else 0
                 member_scores.setdefault(pred["memberRef"], []).append(score)
+            if market_rules:
+                from .route_preferences import is_market_place
+                if is_market_place(place, tags):
+                    market_match_ids.add(cid)
             for p in prefs:
                 vals = member_scores.get(p["memberRef"], [])
                 member_scores[p["memberRef"]] = sum(vals) / len(vals) if vals else 0.0
@@ -528,10 +541,12 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                 if len(selected) < maxc:
                     selected[cid] = eligible_by_id[cid]
         protected_ids = set(anchor_ids)
+        soft_market_ids: set[int] = set()
         if isinstance(route_preferences, dict):
             from .route_preferences import draft_preference_rules
             candidate_ids = list(eligible_by_id)
             required_ids: set[int] = set()
+            required_by_date: dict[str, set[int]] = {day: set() for day in day_strings}
             fixed_by_date: dict[str, set[int]] = {}
             for visit in fixed_visits:
                 fixed_by_date.setdefault(visit["date"], set()).add(visit["contentid"])
@@ -594,20 +609,13 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                 return (-int(cid in required_ids), -coverage.get(cid, 0),
                         -row["minimumMemberScore"], -row["groupScore"], cid)
 
-            for spec in specs:
-                if spec["period"] == "trip":
-                    chosen = sorted(spec["options"], key=candidate_key)[:spec["needed"]]
-                    required_ids.update(chosen)
-                    continue
-
-                slots = list(spec["slots"])
-                slots.sort(key=lambda day: (len(spec["optionsByDate"][day]), day))
+            def assign_slots(slots, options_by_date):
                 assignment: dict[int, int] = {}
                 assigned_slot_by_id: dict[int, int] = {}
 
                 def assign(slot_index: int, seen: set[int]) -> bool:
                     day = slots[slot_index]
-                    for cid in sorted(spec["optionsByDate"][day], key=candidate_key):
+                    for cid in sorted(options_by_date[day], key=candidate_key):
                         if cid in seen:
                             continue
                         seen.add(cid)
@@ -618,13 +626,24 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                             return True
                     return False
 
-                matched = 0
                 for slot_index in range(len(slots)):
-                    if assign(slot_index, set()):
-                        matched += 1
-                if matched < len(slots):
+                    assign(slot_index, set())
+                return assignment
+
+            for spec in specs:
+                if spec["period"] == "trip":
+                    chosen = sorted(spec["options"], key=candidate_key)[:spec["needed"]]
+                    required_ids.update(chosen)
+                    continue
+
+                slots = list(spec["slots"])
+                slots.sort(key=lambda day: (len(spec["optionsByDate"][day]), day))
+                assignment = assign_slots(slots, spec["optionsByDate"])
+                if len(assignment) < len(slots):
                     unresolved.append("REQUIRED_PREFERENCE_UNSATISFIED")
                 required_ids.update(assignment.values())
+                for slot_index, cid in assignment.items():
+                    required_by_date[slots[slot_index]].add(cid)
             if len(protected_ids | required_ids) > maxc:
                 unresolved.append("REQUIRED_PREFERENCE_UNSATISFIED")
             protected_ids.update(required_ids)
@@ -643,11 +662,36 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                     selected[cid] = eligible_by_id[cid]
                 else:
                     unresolved.append("REQUIRED_PREFERENCE_UNSATISFIED")
+            # A visit can serve several members' goals. Reserve options for the
+            # largest target in each period; the optimizer evaluates each actual bound.
+            soft_rules = [rule for rule in market_rules if not rule.get("required")]
+            if soft_rules:
+                daily_goal = max((r["count"] for r in soft_rules if r.get("scope") == "day"), default=0)
+                trip_goal = max((r["count"] for r in soft_rules if r.get("scope") == "trip"), default=0)
+                flexible_markets = (market_match_ids & eligible_by_id.keys()) - anchor_ids
+                hard_daily_ids = set().union(*required_by_date.values())
+                options_by_date, remaining_by_date = {}, {}
+                for day in day_strings:
+                    fixed = fixed_by_date.get(day, set())
+                    occupied = fixed | required_by_date[day]
+                    remaining_by_date[day] = max(0, min(daily_goal - len(occupied & market_match_ids),
+                                                        8 - len(occupied)))
+                    options_by_date[day] = {cid for cid in flexible_markets - hard_daily_ids
+                                            if day in eligible_by_id[cid]["allowedDates"]}
+                slots = [day for index in range(max(remaining_by_date.values(), default=0))
+                         for day in day_strings if index < remaining_by_date[day]]
+                soft_market_ids.update(assign_slots(slots[:maxc], options_by_date).values())
+                fixed_visits_to_markets = sum(v["contentid"] in market_match_ids for v in fixed_visits)
+                represented = (required_ids & market_match_ids) | soft_market_ids
+                remaining = max(0, trip_goal - fixed_visits_to_markets - len(represented))
+                soft_market_ids.update(sorted(flexible_markets - represented, key=candidate_key)[:remaining])
         # Keep meal candidates available to the planner even when their group
         # score ranks behind a large sightseeing pool. The public pool remains
         # bounded and all hard filters above still apply.
         # Lunch, dinner and one alternative in case a proposed restaurant is closed.
-        meal_target = min(3 * len(day_strings), max(0, maxc - len(anchor_ids)))
+        protected_nonmeal_count = sum(1 for cid in protected_ids
+                                      if cid in eligible_by_id and eligible_by_id[cid]["planningRole"] != "meal_stop")
+        meal_target = min(3 * len(day_strings), max(0, maxc - protected_nonmeal_count))
         meal_rows = [x for x in pool if x["planningRole"] == "meal_stop"]
         selected_meals = [x for x in selected.values() if x["planningRole"] == "meal_stop"]
         for meal in meal_rows:
@@ -663,6 +707,24 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
             del selected[worst["contentid"]]
             selected[meal["contentid"]] = meal
             selected_meals.append(meal)
+        # Reserve market options only after guaranteeing fixed visits, hard
+        # quota witnesses, and the meal floor. Surplus meals can free a slot.
+        protected_ids.update(soft_market_ids & selected.keys())
+        meal_count = len(selected_meals)
+        for cid in sorted(soft_market_ids - selected.keys(), key=lambda value: (
+                -eligible_by_id[value]["minimumMemberScore"], -eligible_by_id[value]["groupScore"], value)):
+            replaceable = [row for row in selected.values()
+                           if row["contentid"] not in protected_ids
+                           and (row["planningRole"] != "meal_stop" or meal_count > meal_target)]
+            if not replaceable:
+                break
+            worst = min(replaceable, key=lambda row: (
+                row["minimumMemberScore"], row["groupScore"], -row["contentid"]))
+            del selected[worst["contentid"]]
+            if worst["planningRole"] == "meal_stop":
+                meal_count -= 1
+            selected[cid] = eligible_by_id[cid]
+            protected_ids.add(cid)
         candidate_public = sorted(selected.values(), key=lambda x: (-x["minimumMemberScore"], -x["groupScore"], x["contentid"]))
         result = {"sourceFingerprint": snapshot.fingerprint, "catalogDigest": catalog.digest,
                   "normalizationDigest": ndigest, "policyDigest": pdigest, "eligible": candidate_public,
