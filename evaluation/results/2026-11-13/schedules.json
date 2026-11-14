@@ -1,0 +1,1450 @@
+{
+  "auditProvenance": {
+    "backendDirty": false,
+    "backendHead": "e9422edc13b1dcb1d94e797378fbb4b6931e3ac0",
+    "evaluatedSourceSha256": "c84c11c702202b1372177e30cd75f8ac7f2a9642f6e3c5889c51dd6d340fdac0",
+    "pythonVersion": "3.12.10"
+  },
+  "auditedAt": "2026-11-13T13:24:26.422211+00:00",
+  "corpusSha256": "36c1b65850eed537b876bd6effb31d157066f0f178ae076c2feb3efcf4e94a02",
+  "createdAt": "2026-11-13T13:12:26.014611+00:00",
+  "draftCalls": 1,
+  "executionMode": "live_synthetic_schedule_replay",
+  "generationSourceProvenance": {
+    "backendBase": "e4be3b9",
+    "exactSourceHashAtInvocation": null,
+    "limitation": "Development invocation preceded exact source hashing; subsequent replay hash is recorded.",
+    "workingTreeModified": true
+  },
+  "humanEvaluation": {
+    "preferencesReflected": null,
+    "respondents": 0,
+    "responses": [
+      {
+        "blindOrder": null,
+        "caseId": "user-1",
+        "comment": null,
+        "constraintIssue": null,
+        "preferredPlan": null,
+        "rating1To5": null
+      },
+      {
+        "blindOrder": null,
+        "caseId": "user-2",
+        "comment": null,
+        "constraintIssue": null,
+        "preferredPlan": null,
+        "rating1To5": null
+      },
+      {
+        "blindOrder": null,
+        "caseId": "user-3",
+        "comment": null,
+        "constraintIssue": null,
+        "preferredPlan": null,
+        "rating1To5": null
+      },
+      {
+        "blindOrder": null,
+        "caseId": "user-4",
+        "comment": null,
+        "constraintIssue": null,
+        "preferredPlan": null,
+        "rating1To5": null
+      },
+      {
+        "blindOrder": null,
+        "caseId": "user-5",
+        "comment": null,
+        "constraintIssue": null,
+        "preferredPlan": null,
+        "rating1To5": null
+      }
+    ],
+    "satisfaction": null,
+    "status": "not_measured_until_people_submit_ratings",
+    "wouldUseWithoutEdits": null
+  },
+  "independentAuditLinked": true,
+  "modelParsingCalls": 19,
+  "newProviderCallsForAudit": 0,
+  "parserCallsReused": 19,
+  "routeDataLabel": "synthetic catalog and directed time costs, not live routes",
+  "sampleType": "synthetic",
+  "schedules": [
+    {
+      "aiDraftCallCount": 0,
+      "caseId": "user-1",
+      "issueCodes": [
+        "REQUIRED_PREFERENCE_UNSUPPORTED"
+      ],
+      "planValidation": null,
+      "status": "blocked_required_preference"
+    },
+    {
+      "aiDraftCallCount": 1,
+      "allParticipantConstraintsVerified": false,
+      "baseline": {
+        "fixture": "synthetic_catalog_and_directed_route_costs_not_real_places_or_roads",
+        "reasonCodes": [
+          "ARRIVAL_TIME_UNKNOWN",
+          "OPENING_HOURS_UNKNOWN",
+          "OTHER_TRAVEL_EXPENSES_UNKNOWN",
+          "OVERNIGHT_LOCATION_UNRESOLVED",
+          "PLACE_COST_UNKNOWN",
+          "ROUTE_COORDINATE_INVALID",
+          "TRANSFER_TIME_ESTIMATED",
+          "TRANSPORT_COST_INCOMPLETE",
+          "WALKING_ROUTE_UNKNOWN"
+        ],
+        "routeSeconds": null,
+        "status": "unknown",
+        "unknownDomains": [
+          "budget",
+          "openingHours",
+          "route",
+          "time",
+          "walking"
+        ],
+        "violationCount": 0,
+        "visitCount": 10
+      },
+      "baselineSyntheticOrders": [
+        {
+          "contentids": [
+            1,
+            2,
+            4,
+            3,
+            5
+          ],
+          "date": "2026-12-18"
+        },
+        {
+          "contentids": [
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "date": "2026-12-19"
+        }
+      ],
+      "caseId": "user-2",
+      "independentAudits": {
+        "baseline": {
+          "independentOfProductionValidation": true,
+          "knownPlaceSpendKrw": 0,
+          "knownViolationCount": 0,
+          "knownViolationCounts": {},
+          "mealSlotsUnfulfilled": 0,
+          "routeFactSource": "synthetic directed matrix only; never a real road estimate",
+          "status": "unknown",
+          "totalBudgetStatus": "unknown_other_expenses",
+          "unknownCount": 23,
+          "unknownCounts": {
+            "INTERDAY_TRANSFER_NOT_AUDITED": 1,
+            "OPENING_HOURS_UNKNOWN": 10,
+            "OTHER_TRAVEL_EXPENSES_UNAVAILABLE": 1,
+            "PLACE_FEE_UNKNOWN": 10,
+            "SYNTHETIC_TRANSFER_FACT_UNKNOWN": 1
+          },
+          "unknowns": [
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 1,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 1,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 2,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 2,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 4,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 4,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 3,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 3,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 5,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 5,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "INTERDAY_TRANSFER_NOT_AUDITED",
+              "date": "2026-12-19"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 6,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 6,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 7,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 7,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 8,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 8,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 9,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 9,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 10,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 10,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "SYNTHETIC_TRANSFER_FACT_UNKNOWN",
+              "date": "2026-12-19"
+            },
+            {
+              "code": "OTHER_TRAVEL_EXPENSES_UNAVAILABLE"
+            }
+          ],
+          "violations": []
+        },
+        "optimized": {
+          "independentOfProductionValidation": true,
+          "knownPlaceSpendKrw": 0,
+          "knownViolationCount": 0,
+          "knownViolationCounts": {},
+          "mealSlotsUnfulfilled": 0,
+          "routeFactSource": "synthetic directed matrix only; never a real road estimate",
+          "status": "unknown",
+          "totalBudgetStatus": "unknown_other_expenses",
+          "unknownCount": 23,
+          "unknownCounts": {
+            "INTERDAY_TRANSFER_NOT_AUDITED": 1,
+            "OPENING_HOURS_UNKNOWN": 10,
+            "OTHER_TRAVEL_EXPENSES_UNAVAILABLE": 1,
+            "PLACE_FEE_UNKNOWN": 10,
+            "SYNTHETIC_TRANSFER_FACT_UNKNOWN": 1
+          },
+          "unknowns": [
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 1,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 1,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 2,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 2,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 4,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 4,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 3,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 3,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 5,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 5,
+              "date": "2026-12-18"
+            },
+            {
+              "code": "INTERDAY_TRANSFER_NOT_AUDITED",
+              "date": "2026-12-19"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 6,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 6,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 7,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 7,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 8,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 8,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 9,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 9,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "PLACE_FEE_UNKNOWN",
+              "contentid": 10,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "OPENING_HOURS_UNKNOWN",
+              "contentid": 10,
+              "date": "2026-12-19"
+            },
+            {
+              "code": "SYNTHETIC_TRANSFER_FACT_UNKNOWN",
+              "date": "2026-12-19"
+            },
+            {
+              "code": "OTHER_TRAVEL_EXPENSES_UNAVAILABLE"
+            }
+          ],
+          "violations": []
+        }
+      },
+      "limitations": [
+        "synthetic catalog and directed route minutes, not real routes or operating schedules",
+        "unknown catalog prices/opening-hours remain unknown; no human satisfaction was measured"
+      ],
+      "optimized": {
+        "fixture": "synthetic_catalog_and_directed_route_costs_not_real_places_or_roads",
+        "reasonCodes": [
+          "ARRIVAL_TIME_UNKNOWN",
+          "OPENING_HOURS_UNKNOWN",
+          "OTHER_TRAVEL_EXPENSES_UNKNOWN",
+          "OVERNIGHT_LOCATION_UNRESOLVED",
+          "PLACE_COST_UNKNOWN",
+          "ROUTE_COORDINATE_INVALID",
+          "TRANSFER_TIME_ESTIMATED",
+          "TRANSPORT_COST_INCOMPLETE",
+          "WALKING_ROUTE_UNKNOWN"
+        ],
+        "routeSeconds": null,
+        "status": "unknown",
+        "unknownDomains": [
+          "budget",
+          "openingHours",
+          "route",
+          "time",
+          "walking"
+        ],
+        "violationCount": 0,
+        "visitCount": 10
+      },
+      "optimizedSyntheticOrders": [
+        {
+          "contentids": [
+            1,
+            2,
+            4,
+            3,
+            5
+          ],
+          "date": "2026-12-18"
+        },
+        {
+          "contentids": [
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "date": "2026-12-19"
+        }
+      ],
+      "optimizerDiagnostics": {
+        "acceptedMoves": 0,
+        "acceptedMovesByPhase": {},
+        "attemptedMoves": 24,
+        "attemptedMovesByPhase": {
+          "date_reallocation": 9,
+          "relocate": 6,
+          "two_opt": 9
+        },
+        "baselinePreferenceScore": -45.0,
+        "baselineTravelSeconds": null,
+        "baselineVisitCount": 10,
+        "fallback": "SEARCH_BUDGET_REACHED",
+        "finalPreferenceScore": -45.0,
+        "finalTravelSeconds": null,
+        "finalVisitCount": 10,
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "optimalityGuaranteed": false
+      },
+      "replayLimitation": "Original AI draft was not captured in this early run; audit reconstructs clocks from saved fitted output orders. No Gemini call repeated.",
+      "replayedPlans": {
+        "baseline": {
+          "createdAt": "2026-11-13T13:24:26.420Z",
+          "days": [
+            {
+              "date": "2026-12-18",
+              "edges": [
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 9800,
+                  "durationSeconds": 840,
+                  "fromNodeId": "fa186ef8-cb04-47b5-9db8-36b61b8874fe",
+                  "geometry": [],
+                  "id": "855b67fa-669c-4f7a-b8a4-559ba4ef97fa",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "2fb03756-0b8d-44f4-a860-a1638c22cf40",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 8400,
+                  "durationSeconds": 720,
+                  "fromNodeId": "2fb03756-0b8d-44f4-a860-a1638c22cf40",
+                  "geometry": [],
+                  "id": "ae291696-bb06-402e-aa22-046a66863d3c",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "40e5d4fa-0159-4558-9d2b-887b99a860e3",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 20300,
+                  "durationSeconds": 1740,
+                  "fromNodeId": "40e5d4fa-0159-4558-9d2b-887b99a860e3",
+                  "geometry": [],
+                  "id": "7d246c4f-bee3-49e1-bed0-abcc5d8b44b9",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "c0446d1a-d622-4635-b8cf-b46b1eb4f1fb",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 22400,
+                  "durationSeconds": 1920,
+                  "fromNodeId": "c0446d1a-d622-4635-b8cf-b46b1eb4f1fb",
+                  "geometry": [],
+                  "id": "64c6d536-6247-415f-9109-86c5e11e4eb9",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "b82742f7-b7ce-408c-aebb-f4473f6be851",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 9800,
+                  "durationSeconds": 840,
+                  "fromNodeId": "b82742f7-b7ce-408c-aebb-f4473f6be851",
+                  "geometry": [],
+                  "id": "76a74e11-0df9-4f50-a261-a09ffd422219",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "165de810-b384-4879-bc6b-6fa2df684321",
+                  "walkingSeconds": []
+                }
+              ],
+              "nodes": [
+                {
+                  "contentid": null,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.0,
+                    "longitude": 127.0
+                  },
+                  "estimatedCostKrw": 0,
+                  "estimatedEndAt": "2026-12-18T00:00:00.000Z",
+                  "estimatedStartAt": "2026-12-18T00:00:00.000Z",
+                  "feeLabel": "요금 확인 필요",
+                  "id": "fa186ef8-cb04-47b5-9db8-36b61b8874fe",
+                  "kind": "START",
+                  "locked": true,
+                  "nodeKey": "fa186ef8-cb04-47b5-9db8-36b61b8874fe",
+                  "stayMinutes": 0,
+                  "title": "synthetic start"
+                },
+                {
+                  "contentid": 1,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.01,
+                    "longitude": 127.01
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": "2026-12-18T00:59:00.000Z",
+                  "estimatedStartAt": "2026-12-18T00:14:00.000Z",
+                  "feeLabel": "요금 확인 필요",
+                  "id": "2fb03756-0b8d-44f4-a860-a1638c22cf40",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "2fb03756-0b8d-44f4-a860-a1638c22cf40",
+                  "plannedEndAt": "2026-12-18T00:59:00.000Z",
+                  "plannedStartAt": "2026-12-18T00:14:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 1"
+                },
+                {
+                  "contentid": 2,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.02,
+                    "longitude": 127.02
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": "2026-12-18T01:56:00.000Z",
+                  "estimatedStartAt": "2026-12-18T01:11:00.000Z",
+                  "feeLabel": "요금 확인 필요",
+                  "id": "40e5d4fa-0159-4558-9d2b-887b99a860e3",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "40e5d4fa-0159-4558-9d2b-887b99a860e3",
+                  "plannedEndAt": "2026-12-18T01:56:00.000Z",
+                  "plannedStartAt": "2026-12-18T01:11:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 2"
+                },
+                {
+                  "contentid": 4,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.04,
+                    "longitude": 127.04
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": "2026-12-18T03:15:00.000Z",
+                  "estimatedStartAt": "2026-12-18T02:30:00.000Z",
+                  "feeLabel": "요금 확인 필요",
+                  "id": "c0446d1a-d622-4635-b8cf-b46b1eb4f1fb",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "c0446d1a-d622-4635-b8cf-b46b1eb4f1fb",
+                  "plannedEndAt": "2026-12-18T03:15:00.000Z",
+                  "plannedStartAt": "2026-12-18T02:30:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 4"
+                },
+                {
+                  "contentid": 3,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.03,
+                    "longitude": 127.03
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": "2026-12-18T04:32:00.000Z",
+                  "estimatedStartAt": "2026-12-18T03:47:00.000Z",
+                  "feeLabel": "요금 확인 필요",
+                  "id": "b82742f7-b7ce-408c-aebb-f4473f6be851",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "b82742f7-b7ce-408c-aebb-f4473f6be851",
+                  "plannedEndAt": "2026-12-18T04:32:00.000Z",
+                  "plannedStartAt": "2026-12-18T03:47:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 3"
+                },
+                {
+                  "contentid": 5,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.05,
+                    "longitude": 127.05
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": "2026-12-18T05:31:00.000Z",
+                  "estimatedStartAt": "2026-12-18T04:46:00.000Z",
+                  "feeLabel": "요금 확인 필요",
+                  "id": "165de810-b384-4879-bc6b-6fa2df684321",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "165de810-b384-4879-bc6b-6fa2df684321",
+                  "plannedEndAt": "2026-12-18T05:31:00.000Z",
+                  "plannedStartAt": "2026-12-18T04:46:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 5"
+                }
+              ]
+            },
+            {
+              "date": "2026-12-19",
+              "edges": [
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": null,
+                  "durationSeconds": null,
+                  "fromNodeId": "165de810-b384-4879-bc6b-6fa2df684321",
+                  "geometry": [],
+                  "id": "a243e0e1-d01c-4105-97c1-471ac98df6d9",
+                  "knownCostKrw": null,
+                  "mode": "car",
+                  "reasonCodes": [
+                    "ROUTE_COORDINATE_INVALID"
+                  ],
+                  "status": "unknown",
+                  "toNodeId": "08da0a8b-6f34-4d33-8448-0512926af625",
+                  "walkingSeconds": null
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 5600,
+                  "durationSeconds": 480,
+                  "fromNodeId": "08da0a8b-6f34-4d33-8448-0512926af625",
+                  "geometry": [],
+                  "id": "f3c42573-9bb9-46fd-b5e9-e74c54702c69",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "aba1ead7-a28d-4eca-8c30-f1775a6c10e4",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 9800,
+                  "durationSeconds": 840,
+                  "fromNodeId": "aba1ead7-a28d-4eca-8c30-f1775a6c10e4",
+                  "geometry": [],
+                  "id": "0e642f4e-fa97-488b-9372-a2e5f01919e9",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "6abb64f3-0236-40e7-b36b-ad59f428902c",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 18200,
+                  "durationSeconds": 1560,
+                  "fromNodeId": "6abb64f3-0236-40e7-b36b-ad59f428902c",
+                  "geometry": [],
+                  "id": "5a368269-33c9-4d72-b198-49bb1763f678",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "38ea4f73-48c3-44d5-b6ff-68eb68900e51",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 11200,
+                  "durationSeconds": 960,
+                  "fromNodeId": "38ea4f73-48c3-44d5-b6ff-68eb68900e51",
+                  "geometry": [],
+                  "id": "69875dff-157c-47f2-902c-0d8f0c99b43a",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "380d507b-2ef6-4f6f-a108-54925f315814",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 17500,
+                  "durationSeconds": 1500,
+                  "fromNodeId": "380d507b-2ef6-4f6f-a108-54925f315814",
+                  "geometry": [],
+                  "id": "899ccb3f-e7d3-4db5-aeba-c1a9e580d5fc",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "a8ce6602-229d-42d5-8434-662e44f0dacd",
+                  "walkingSeconds": []
+                }
+              ],
+              "nodes": [
+                {
+                  "contentid": 6,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.06,
+                    "longitude": 127.06
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": null,
+                  "estimatedStartAt": null,
+                  "feeLabel": "요금 확인 필요",
+                  "id": "08da0a8b-6f34-4d33-8448-0512926af625",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "08da0a8b-6f34-4d33-8448-0512926af625",
+                  "plannedEndAt": "2026-12-19T01:15:00.000Z",
+                  "plannedStartAt": "2026-12-19T00:30:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 6"
+                },
+                {
+                  "contentid": 7,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.07,
+                    "longitude": 127.07
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": null,
+                  "estimatedStartAt": null,
+                  "feeLabel": "요금 확인 필요",
+                  "id": "aba1ead7-a28d-4eca-8c30-f1775a6c10e4",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "aba1ead7-a28d-4eca-8c30-f1775a6c10e4",
+                  "plannedEndAt": "2026-12-19T02:08:00.000Z",
+                  "plannedStartAt": "2026-12-19T01:23:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 7"
+                },
+                {
+                  "contentid": 8,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.08,
+                    "longitude": 127.08
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": null,
+                  "estimatedStartAt": null,
+                  "feeLabel": "요금 확인 필요",
+                  "id": "6abb64f3-0236-40e7-b36b-ad59f428902c",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "6abb64f3-0236-40e7-b36b-ad59f428902c",
+                  "plannedEndAt": "2026-12-19T03:15:00.000Z",
+                  "plannedStartAt": "2026-12-19T02:30:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 8"
+                },
+                {
+                  "contentid": 9,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.09,
+                    "longitude": 127.09
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": null,
+                  "estimatedStartAt": null,
+                  "feeLabel": "요금 확인 필요",
+                  "id": "38ea4f73-48c3-44d5-b6ff-68eb68900e51",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "38ea4f73-48c3-44d5-b6ff-68eb68900e51",
+                  "plannedEndAt": "2026-12-19T04:26:00.000Z",
+                  "plannedStartAt": "2026-12-19T03:41:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 9"
+                },
+                {
+                  "contentid": 10,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.1,
+                    "longitude": 127.1
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": null,
+                  "estimatedStartAt": null,
+                  "feeLabel": "요금 확인 필요",
+                  "id": "380d507b-2ef6-4f6f-a108-54925f315814",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "380d507b-2ef6-4f6f-a108-54925f315814",
+                  "plannedEndAt": "2026-12-19T05:27:00.000Z",
+                  "plannedStartAt": "2026-12-19T04:42:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 10"
+                },
+                {
+                  "contentid": null,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.0,
+                    "longitude": 127.0
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": null,
+                  "estimatedStartAt": null,
+                  "feeLabel": "요금 확인 필요",
+                  "id": "a8ce6602-229d-42d5-8434-662e44f0dacd",
+                  "kind": "END",
+                  "locked": true,
+                  "nodeKey": "a8ce6602-229d-42d5-8434-662e44f0dacd",
+                  "stayMinutes": 0,
+                  "title": "synthetic end"
+                }
+              ]
+            }
+          ],
+          "schemaVersion": 1,
+          "validation": {
+            "budget": {
+              "reasonCodes": [
+                "OTHER_TRAVEL_EXPENSES_UNKNOWN",
+                "PLACE_COST_UNKNOWN",
+                "TRANSPORT_COST_INCOMPLETE"
+              ],
+              "status": "unknown"
+            },
+            "knownCostKrw": 0,
+            "openingHours": {
+              "reasonCodes": [
+                "OPENING_HOURS_UNKNOWN"
+              ],
+              "status": "unknown"
+            },
+            "route": {
+              "reasonCodes": [
+                "OVERNIGHT_LOCATION_UNRESOLVED",
+                "ROUTE_COORDINATE_INVALID"
+              ],
+              "status": "unknown"
+            },
+            "status": "unknown",
+            "time": {
+              "reasonCodes": [
+                "ARRIVAL_TIME_UNKNOWN",
+                "OVERNIGHT_LOCATION_UNRESOLVED"
+              ],
+              "status": "unknown"
+            },
+            "totalCostKrw": null,
+            "violations": [],
+            "walking": {
+              "reasonCodes": [
+                "WALKING_ROUTE_UNKNOWN"
+              ],
+              "status": "unknown"
+            },
+            "warnings": [
+              "ARRIVAL_TIME_UNKNOWN",
+              "OPENING_HOURS_UNKNOWN",
+              "OTHER_TRAVEL_EXPENSES_UNKNOWN",
+              "OVERNIGHT_LOCATION_UNRESOLVED",
+              "PLACE_COST_UNKNOWN",
+              "ROUTE_COORDINATE_INVALID",
+              "TRANSFER_TIME_ESTIMATED",
+              "TRANSPORT_COST_INCOMPLETE",
+              "WALKING_ROUTE_UNKNOWN"
+            ]
+          }
+        },
+        "optimized": {
+          "createdAt": "2026-11-13T13:24:26.420Z",
+          "days": [
+            {
+              "date": "2026-12-18",
+              "edges": [
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 9800,
+                  "durationSeconds": 840,
+                  "fromNodeId": "4525794c-80a0-44da-8e12-6a542dc35085",
+                  "geometry": [],
+                  "id": "52052dc9-2016-4788-8f7d-981cd142b7ea",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "fc28a157-21d0-4458-8e86-a811d19c88ca",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 8400,
+                  "durationSeconds": 720,
+                  "fromNodeId": "fc28a157-21d0-4458-8e86-a811d19c88ca",
+                  "geometry": [],
+                  "id": "a8b77620-9af7-45a4-a2c5-277089b9b3ab",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "b41810aa-bcc8-4e4f-b12e-d692a6506d0d",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 20300,
+                  "durationSeconds": 1740,
+                  "fromNodeId": "b41810aa-bcc8-4e4f-b12e-d692a6506d0d",
+                  "geometry": [],
+                  "id": "748769c1-51e8-4b20-b911-b6af81f8fa5a",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "c905fc6c-be67-4cda-9054-a69672efbac1",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 22400,
+                  "durationSeconds": 1920,
+                  "fromNodeId": "c905fc6c-be67-4cda-9054-a69672efbac1",
+                  "geometry": [],
+                  "id": "c85cec37-54f9-454e-96ec-04a9c04d75c0",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "7d0f40ff-8e1f-4065-bc68-cf99631867b4",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 9800,
+                  "durationSeconds": 840,
+                  "fromNodeId": "7d0f40ff-8e1f-4065-bc68-cf99631867b4",
+                  "geometry": [],
+                  "id": "7f3c443e-0018-4f22-b2d2-2f6a3014dbf8",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "8b3cd45c-2b48-4590-a96b-fc8f3389b484",
+                  "walkingSeconds": []
+                }
+              ],
+              "nodes": [
+                {
+                  "contentid": null,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.0,
+                    "longitude": 127.0
+                  },
+                  "estimatedCostKrw": 0,
+                  "estimatedEndAt": "2026-12-18T00:00:00.000Z",
+                  "estimatedStartAt": "2026-12-18T00:00:00.000Z",
+                  "feeLabel": "요금 확인 필요",
+                  "id": "4525794c-80a0-44da-8e12-6a542dc35085",
+                  "kind": "START",
+                  "locked": true,
+                  "nodeKey": "4525794c-80a0-44da-8e12-6a542dc35085",
+                  "stayMinutes": 0,
+                  "title": "synthetic start"
+                },
+                {
+                  "contentid": 1,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.01,
+                    "longitude": 127.01
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": "2026-12-18T00:59:00.000Z",
+                  "estimatedStartAt": "2026-12-18T00:14:00.000Z",
+                  "feeLabel": "요금 확인 필요",
+                  "id": "fc28a157-21d0-4458-8e86-a811d19c88ca",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "fc28a157-21d0-4458-8e86-a811d19c88ca",
+                  "plannedEndAt": "2026-12-18T00:59:00.000Z",
+                  "plannedStartAt": "2026-12-18T00:14:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 1"
+                },
+                {
+                  "contentid": 2,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.02,
+                    "longitude": 127.02
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": "2026-12-18T01:56:00.000Z",
+                  "estimatedStartAt": "2026-12-18T01:11:00.000Z",
+                  "feeLabel": "요금 확인 필요",
+                  "id": "b41810aa-bcc8-4e4f-b12e-d692a6506d0d",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "b41810aa-bcc8-4e4f-b12e-d692a6506d0d",
+                  "plannedEndAt": "2026-12-18T01:56:00.000Z",
+                  "plannedStartAt": "2026-12-18T01:11:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 2"
+                },
+                {
+                  "contentid": 4,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.04,
+                    "longitude": 127.04
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": "2026-12-18T03:15:00.000Z",
+                  "estimatedStartAt": "2026-12-18T02:30:00.000Z",
+                  "feeLabel": "요금 확인 필요",
+                  "id": "c905fc6c-be67-4cda-9054-a69672efbac1",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "c905fc6c-be67-4cda-9054-a69672efbac1",
+                  "plannedEndAt": "2026-12-18T03:15:00.000Z",
+                  "plannedStartAt": "2026-12-18T02:30:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 4"
+                },
+                {
+                  "contentid": 3,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.03,
+                    "longitude": 127.03
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": "2026-12-18T04:32:00.000Z",
+                  "estimatedStartAt": "2026-12-18T03:47:00.000Z",
+                  "feeLabel": "요금 확인 필요",
+                  "id": "7d0f40ff-8e1f-4065-bc68-cf99631867b4",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "7d0f40ff-8e1f-4065-bc68-cf99631867b4",
+                  "plannedEndAt": "2026-12-18T04:32:00.000Z",
+                  "plannedStartAt": "2026-12-18T03:47:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 3"
+                },
+                {
+                  "contentid": 5,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.05,
+                    "longitude": 127.05
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": "2026-12-18T05:31:00.000Z",
+                  "estimatedStartAt": "2026-12-18T04:46:00.000Z",
+                  "feeLabel": "요금 확인 필요",
+                  "id": "8b3cd45c-2b48-4590-a96b-fc8f3389b484",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "8b3cd45c-2b48-4590-a96b-fc8f3389b484",
+                  "plannedEndAt": "2026-12-18T05:31:00.000Z",
+                  "plannedStartAt": "2026-12-18T04:46:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 5"
+                }
+              ]
+            },
+            {
+              "date": "2026-12-19",
+              "edges": [
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": null,
+                  "durationSeconds": null,
+                  "fromNodeId": "8b3cd45c-2b48-4590-a96b-fc8f3389b484",
+                  "geometry": [],
+                  "id": "9202cf1c-e88c-4611-99f7-be7dd3d46b3c",
+                  "knownCostKrw": null,
+                  "mode": "car",
+                  "reasonCodes": [
+                    "ROUTE_COORDINATE_INVALID"
+                  ],
+                  "status": "unknown",
+                  "toNodeId": "6cb68b2c-adeb-47fd-bddd-74c7a7b5032c",
+                  "walkingSeconds": null
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 5600,
+                  "durationSeconds": 480,
+                  "fromNodeId": "6cb68b2c-adeb-47fd-bddd-74c7a7b5032c",
+                  "geometry": [],
+                  "id": "db67e476-80ca-46a8-aa8a-6dbe5ed96ae4",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "182df90d-2276-4bf6-a6dd-dbdc3fc584d5",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 9800,
+                  "durationSeconds": 840,
+                  "fromNodeId": "182df90d-2276-4bf6-a6dd-dbdc3fc584d5",
+                  "geometry": [],
+                  "id": "f4a4fe3c-1e05-4196-b8d2-8f63f9a1edb9",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "dba0f2e5-a683-41a6-8c3a-baac91902265",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 18200,
+                  "durationSeconds": 1560,
+                  "fromNodeId": "dba0f2e5-a683-41a6-8c3a-baac91902265",
+                  "geometry": [],
+                  "id": "59743a2e-dcb5-4a2a-8c27-c70626f0676c",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "e3d256b2-3586-4b52-b22a-50af8b314937",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 11200,
+                  "durationSeconds": 960,
+                  "fromNodeId": "e3d256b2-3586-4b52-b22a-50af8b314937",
+                  "geometry": [],
+                  "id": "5b405366-ab20-4f32-8a24-afd9c82a683c",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "a24f7b51-b5d1-4c62-bbfb-d5b67f75ab4c",
+                  "walkingSeconds": []
+                },
+                {
+                  "checkedAt": "2026-11-13T13:24:26.420Z",
+                  "costComplete": false,
+                  "distanceMeters": 17500,
+                  "durationSeconds": 1500,
+                  "fromNodeId": "a24f7b51-b5d1-4c62-bbfb-d5b67f75ab4c",
+                  "geometry": [],
+                  "id": "5265beff-fd9e-4921-ba96-1647619f9246",
+                  "knownCostKrw": 0,
+                  "mode": "car",
+                  "reasonCodes": [],
+                  "status": "verified",
+                  "toNodeId": "0e8a894d-7075-4117-ba55-cfdaa25012d4",
+                  "walkingSeconds": []
+                }
+              ],
+              "nodes": [
+                {
+                  "contentid": 6,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.06,
+                    "longitude": 127.06
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": null,
+                  "estimatedStartAt": null,
+                  "feeLabel": "요금 확인 필요",
+                  "id": "6cb68b2c-adeb-47fd-bddd-74c7a7b5032c",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "6cb68b2c-adeb-47fd-bddd-74c7a7b5032c",
+                  "plannedEndAt": "2026-12-19T01:15:00.000Z",
+                  "plannedStartAt": "2026-12-19T00:30:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 6"
+                },
+                {
+                  "contentid": 7,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.07,
+                    "longitude": 127.07
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": null,
+                  "estimatedStartAt": null,
+                  "feeLabel": "요금 확인 필요",
+                  "id": "182df90d-2276-4bf6-a6dd-dbdc3fc584d5",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "182df90d-2276-4bf6-a6dd-dbdc3fc584d5",
+                  "plannedEndAt": "2026-12-19T02:08:00.000Z",
+                  "plannedStartAt": "2026-12-19T01:23:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 7"
+                },
+                {
+                  "contentid": 8,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.08,
+                    "longitude": 127.08
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": null,
+                  "estimatedStartAt": null,
+                  "feeLabel": "요금 확인 필요",
+                  "id": "dba0f2e5-a683-41a6-8c3a-baac91902265",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "dba0f2e5-a683-41a6-8c3a-baac91902265",
+                  "plannedEndAt": "2026-12-19T03:15:00.000Z",
+                  "plannedStartAt": "2026-12-19T02:30:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 8"
+                },
+                {
+                  "contentid": 9,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.09,
+                    "longitude": 127.09
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": null,
+                  "estimatedStartAt": null,
+                  "feeLabel": "요금 확인 필요",
+                  "id": "e3d256b2-3586-4b52-b22a-50af8b314937",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "e3d256b2-3586-4b52-b22a-50af8b314937",
+                  "plannedEndAt": "2026-12-19T04:26:00.000Z",
+                  "plannedStartAt": "2026-12-19T03:41:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 9"
+                },
+                {
+                  "contentid": 10,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.1,
+                    "longitude": 127.1
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": null,
+                  "estimatedStartAt": null,
+                  "feeLabel": "요금 확인 필요",
+                  "id": "a24f7b51-b5d1-4c62-bbfb-d5b67f75ab4c",
+                  "kind": "PLACE",
+                  "locked": false,
+                  "nodeKey": "a24f7b51-b5d1-4c62-bbfb-d5b67f75ab4c",
+                  "plannedEndAt": "2026-12-19T05:27:00.000Z",
+                  "plannedStartAt": "2026-12-19T04:42:00.000Z",
+                  "stayMinutes": 45,
+                  "title": "합성 제천시 장소 10"
+                },
+                {
+                  "contentid": null,
+                  "coordinate": {
+                    "crs": "WGS84",
+                    "latitude": 36.0,
+                    "longitude": 127.0
+                  },
+                  "estimatedCostKrw": null,
+                  "estimatedEndAt": null,
+                  "estimatedStartAt": null,
+                  "feeLabel": "요금 확인 필요",
+                  "id": "0e8a894d-7075-4117-ba55-cfdaa25012d4",
+                  "kind": "END",
+                  "locked": true,
+                  "nodeKey": "0e8a894d-7075-4117-ba55-cfdaa25012d4",
+                  "stayMinutes": 0,
+                  "title": "synthetic end"
+                }
+              ]
+            }
+          ],
+          "schemaVersion": 1,
+          "validation": {
+            "budget": {
+              "reasonCodes": [
+                "OTHER_TRAVEL_EXPENSES_UNKNOWN",
+                "PLACE_COST_UNKNOWN",
+                "TRANSPORT_COST_INCOMPLETE"
+              ],
+              "status": "unknown"
+            },
+            "knownCostKrw": 0,
+            "openingHours": {
+              "reasonCodes": [
+                "OPENING_HOURS_UNKNOWN"
+              ],
+              "status": "unknown"
+            },
+            "route": {
+              "reasonCodes": [
+                "OVERNIGHT_LOCATION_UNRESOLVED",
+                "ROUTE_COORDINATE_INVALID"
+              ],
+              "status": "unknown"
+            },
+            "status": "unknown",
+            "time": {
+              "reasonCodes": [
+                "ARRIVAL_TIME_UNKNOWN",
+                "OVERNIGHT_LOCATION_UNRESOLVED"
+              ],
+              "status": "unknown"
+            },
+            "totalCostKrw": null,
+            "violations": [],
+            "walking": {
+              "reasonCodes": [
+                "WALKING_ROUTE_UNKNOWN"
+              ],
+              "status": "unknown"
+            },
+            "warnings": [
+              "ARRIVAL_TIME_UNKNOWN",
+              "OPENING_HOURS_UNKNOWN",
+              "OTHER_TRAVEL_EXPENSES_UNKNOWN",
+              "OVERNIGHT_LOCATION_UNRESOLVED",
+              "PLACE_COST_UNKNOWN",
+              "ROUTE_COORDINATE_INVALID",
+              "TRANSFER_TIME_ESTIMATED",
+              "TRANSPORT_COST_INCOMPLETE",
+              "WALKING_ROUTE_UNKNOWN"
+            ]
+          }
+        }
+      },
+      "sameGeminiDraftUsedForBoth": true,
+      "scheduleInputScope": "combined_personal_only; other member drafts/group conflict decisions not injected",
+      "status": "completed"
+    },
+    {
+      "aiDraftCallCount": 0,
+      "caseId": "user-3",
+      "planValidation": null,
+      "reason": "A walking limit or explicit unlimited setting is required before generation.",
+      "status": "blocked_walking_clarification"
+    },
+    {
+      "aiDraftCallCount": 0,
+      "caseId": "user-4",
+      "planValidation": null,
+      "reason": "A walking limit or explicit unlimited setting is required before generation.",
+      "status": "blocked_walking_clarification"
+    },
+    {
+      "aiDraftCallCount": 0,
+      "caseId": "user-5",
+      "planValidation": null,
+      "reason": "A walking limit or explicit unlimited setting is required before generation.",
+      "status": "blocked_walking_clarification"
+    }
+  ],
+  "schedulingModelCalls": 1,
+  "totalLiveCalls": 20
+}

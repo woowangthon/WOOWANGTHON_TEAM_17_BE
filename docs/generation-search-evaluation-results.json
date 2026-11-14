@@ -1,0 +1,1023 @@
+{
+  "data": "4 synthetic cases x 4 variants; handcrafted vectors and route times; no real users/providers",
+  "results": [
+    {
+      "case": "joint_two_replacements",
+      "variant": "existing",
+      "expectedFeasible": true,
+      "requestedVisits": 3,
+      "generated": true,
+      "visits": 1,
+      "visitIds": [
+        [
+          5
+        ]
+      ],
+      "knownViolations": 0,
+      "validationStatus": "unknown",
+      "unknownDomains": [
+        "budget"
+      ],
+      "warnings": [
+        "MEAL_SLOT_UNFILLED",
+        "OTHER_TRAVEL_EXPENSES_UNKNOWN"
+      ],
+      "travelSeconds": 600,
+      "semanticRedundancy": 0.0,
+      "routeCalls": 5,
+      "searchMetrics": {
+        "baselineVisitCount": 1,
+        "finalVisitCount": 1,
+        "baselineTravelSeconds": 600,
+        "finalTravelSeconds": 600,
+        "attemptedMoves": 0,
+        "acceptedMoves": 0,
+        "baselinePreferenceScore": 0.88,
+        "finalPreferenceScore": 0.88,
+        "baselineAdjustedUtility": 0.88,
+        "finalAdjustedUtility": 0.88,
+        "baselineCategoryRepetitions": 0,
+        "finalCategoryRepetitions": 0,
+        "policyVersion": "alns-mmr-category-car40-walking-v3",
+        "utilityScreenedMoves": 0,
+        "attemptedMovesByPhase": {},
+        "acceptedMovesByPhase": {},
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "optimalityGuaranteed": false,
+        "fallback": "NO_SAFE_IMPROVEMENT",
+        "searchEvaluationsUsed": 0,
+        "searchEvaluationsRemaining": 24
+      }
+    },
+    {
+      "case": "joint_two_replacements",
+      "variant": "alns_only",
+      "expectedFeasible": true,
+      "requestedVisits": 3,
+      "generated": true,
+      "visits": 3,
+      "visitIds": [
+        [
+          3,
+          4,
+          5
+        ]
+      ],
+      "knownViolations": 0,
+      "validationStatus": "unknown",
+      "unknownDomains": [
+        "budget"
+      ],
+      "warnings": [
+        "MEAL_SLOT_UNFILLED",
+        "OTHER_TRAVEL_EXPENSES_UNKNOWN"
+      ],
+      "travelSeconds": 1200,
+      "semanticRedundancy": 0.0,
+      "routeCalls": 10,
+      "searchMetrics": {
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "baselineVisitCount": 3,
+        "finalVisitCount": 3,
+        "attemptedMoves": 0,
+        "acceptedMoves": 0,
+        "feasibleCandidates": 1,
+        "destroyOperatorsTried": {
+          "low_utility_related": 8,
+          "seeded_random": 12,
+          "related": 4
+        },
+        "repairOperatorsTried": {
+          "greedy": 10,
+          "alternative_first": 14
+        },
+        "destroyOperatorWeights": {
+          "low_utility_related": 0.7334,
+          "related": 0.6719,
+          "seeded_random": 0.3835
+        },
+        "repairOperatorWeights": {
+          "greedy": 0.428,
+          "alternative_first": 0.428
+        },
+        "outcomes": {
+          "infeasible:ScheduleWindowError": 22,
+          "infeasible": 22,
+          "feasible": 1,
+          "rejected_validation": 1
+        },
+        "optimalityGuaranteed": false,
+        "strictBaselineChecks": 1,
+        "searchEvaluationsUsed": 24,
+        "searchEvaluationsRemaining": 0,
+        "baselineTravelSeconds": 1200,
+        "finalTravelSeconds": 1200,
+        "baselinePreferenceScore": 2.73,
+        "finalPreferenceScore": 2.73,
+        "baselineAdjustedUtility": 2.73,
+        "finalAdjustedUtility": 2.73,
+        "baselineCategoryRepetitions": 0,
+        "finalCategoryRepetitions": 0,
+        "policyVersion": "alns-mmr-category-car40-walking-v3",
+        "utilityScreenedMoves": 0,
+        "attemptedMovesByPhase": {},
+        "acceptedMovesByPhase": {},
+        "fallback": "SEARCH_BUDGET_REACHED",
+        "alns": {
+          "method": "adaptive-large-neighborhood-repair",
+          "baselineVisitCount": 3,
+          "finalVisitCount": 3,
+          "attemptedMoves": 24,
+          "acceptedMoves": 0,
+          "feasibleCandidates": 1,
+          "destroyOperatorsTried": {
+            "low_utility_related": 8,
+            "seeded_random": 12,
+            "related": 4
+          },
+          "repairOperatorsTried": {
+            "greedy": 10,
+            "alternative_first": 14
+          },
+          "destroyOperatorWeights": {
+            "low_utility_related": 0.7334,
+            "related": 0.6719,
+            "seeded_random": 0.3835
+          },
+          "repairOperatorWeights": {
+            "greedy": 0.428,
+            "alternative_first": 0.428
+          },
+          "outcomes": {
+            "infeasible:ScheduleWindowError": 22,
+            "infeasible": 22,
+            "feasible": 1,
+            "rejected_validation": 1
+          },
+          "optimalityGuaranteed": false,
+          "strictBaselineChecks": 1,
+          "searchEvaluationsUsed": 24,
+          "searchEvaluationsRemaining": 0
+        },
+        "combinedMethod": "adaptive-large-neighborhood-then-local-search"
+      }
+    },
+    {
+      "case": "joint_two_replacements",
+      "variant": "semantic_only",
+      "expectedFeasible": true,
+      "requestedVisits": 3,
+      "generated": true,
+      "visits": 1,
+      "visitIds": [
+        [
+          5
+        ]
+      ],
+      "knownViolations": 0,
+      "validationStatus": "unknown",
+      "unknownDomains": [
+        "budget"
+      ],
+      "warnings": [
+        "MEAL_SLOT_UNFILLED",
+        "OTHER_TRAVEL_EXPENSES_UNKNOWN"
+      ],
+      "travelSeconds": 600,
+      "semanticRedundancy": 0.0,
+      "routeCalls": 5,
+      "searchMetrics": {
+        "baselineVisitCount": 1,
+        "finalVisitCount": 1,
+        "baselineTravelSeconds": 600,
+        "finalTravelSeconds": 600,
+        "attemptedMoves": 0,
+        "acceptedMoves": 0,
+        "baselinePreferenceScore": 0.88,
+        "finalPreferenceScore": 0.88,
+        "baselineAdjustedUtility": 0.88,
+        "finalAdjustedUtility": 0.88,
+        "baselineCategoryRepetitions": 0,
+        "finalCategoryRepetitions": 0,
+        "policyVersion": "alns-mmr-category-car40-walking-v3",
+        "utilityScreenedMoves": 0,
+        "attemptedMovesByPhase": {},
+        "acceptedMovesByPhase": {},
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "optimalityGuaranteed": false,
+        "fallback": "NO_SAFE_IMPROVEMENT",
+        "searchEvaluationsUsed": 0,
+        "searchEvaluationsRemaining": 24
+      }
+    },
+    {
+      "case": "joint_two_replacements",
+      "variant": "combined",
+      "expectedFeasible": true,
+      "requestedVisits": 3,
+      "generated": true,
+      "visits": 3,
+      "visitIds": [
+        [
+          3,
+          4,
+          5
+        ]
+      ],
+      "knownViolations": 0,
+      "validationStatus": "unknown",
+      "unknownDomains": [
+        "budget"
+      ],
+      "warnings": [
+        "MEAL_SLOT_UNFILLED",
+        "OTHER_TRAVEL_EXPENSES_UNKNOWN"
+      ],
+      "travelSeconds": 1200,
+      "semanticRedundancy": 0.0,
+      "routeCalls": 10,
+      "searchMetrics": {
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "baselineVisitCount": 3,
+        "finalVisitCount": 3,
+        "attemptedMoves": 0,
+        "acceptedMoves": 0,
+        "feasibleCandidates": 1,
+        "destroyOperatorsTried": {
+          "low_utility_related": 8,
+          "seeded_random": 12,
+          "related": 4
+        },
+        "repairOperatorsTried": {
+          "greedy": 10,
+          "alternative_first": 14
+        },
+        "destroyOperatorWeights": {
+          "low_utility_related": 0.7334,
+          "related": 0.6719,
+          "seeded_random": 0.3835
+        },
+        "repairOperatorWeights": {
+          "greedy": 0.428,
+          "alternative_first": 0.428
+        },
+        "outcomes": {
+          "infeasible:ScheduleWindowError": 22,
+          "infeasible": 22,
+          "feasible": 1,
+          "rejected_validation": 1
+        },
+        "optimalityGuaranteed": false,
+        "strictBaselineChecks": 1,
+        "searchEvaluationsUsed": 24,
+        "searchEvaluationsRemaining": 0,
+        "baselineTravelSeconds": 1200,
+        "finalTravelSeconds": 1200,
+        "baselinePreferenceScore": 2.73,
+        "finalPreferenceScore": 2.73,
+        "baselineAdjustedUtility": 2.73,
+        "finalAdjustedUtility": 2.73,
+        "baselineCategoryRepetitions": 0,
+        "finalCategoryRepetitions": 0,
+        "policyVersion": "alns-mmr-category-car40-walking-v3",
+        "utilityScreenedMoves": 0,
+        "attemptedMovesByPhase": {},
+        "acceptedMovesByPhase": {},
+        "fallback": "SEARCH_BUDGET_REACHED",
+        "alns": {
+          "method": "adaptive-large-neighborhood-repair",
+          "baselineVisitCount": 3,
+          "finalVisitCount": 3,
+          "attemptedMoves": 24,
+          "acceptedMoves": 0,
+          "feasibleCandidates": 1,
+          "destroyOperatorsTried": {
+            "low_utility_related": 8,
+            "seeded_random": 12,
+            "related": 4
+          },
+          "repairOperatorsTried": {
+            "greedy": 10,
+            "alternative_first": 14
+          },
+          "destroyOperatorWeights": {
+            "low_utility_related": 0.7334,
+            "related": 0.6719,
+            "seeded_random": 0.3835
+          },
+          "repairOperatorWeights": {
+            "greedy": 0.428,
+            "alternative_first": 0.428
+          },
+          "outcomes": {
+            "infeasible:ScheduleWindowError": 22,
+            "infeasible": 22,
+            "feasible": 1,
+            "rejected_validation": 1
+          },
+          "optimalityGuaranteed": false,
+          "strictBaselineChecks": 1,
+          "searchEvaluationsUsed": 24,
+          "searchEvaluationsRemaining": 0
+        },
+        "combinedMethod": "adaptive-large-neighborhood-then-local-search"
+      }
+    },
+    {
+      "case": "date_reallocation",
+      "variant": "existing",
+      "expectedFeasible": true,
+      "requestedVisits": 3,
+      "generated": true,
+      "visits": 2,
+      "visitIds": [
+        [
+          1
+        ],
+        [
+          2
+        ]
+      ],
+      "knownViolations": 0,
+      "validationStatus": "unknown",
+      "unknownDomains": [
+        "route",
+        "walking",
+        "time",
+        "budget",
+        "openingHours"
+      ],
+      "warnings": [
+        "ARRIVAL_TIME_UNKNOWN",
+        "MEAL_SLOT_UNFILLED",
+        "OPENING_HOURS_UNKNOWN",
+        "OTHER_TRAVEL_EXPENSES_UNKNOWN",
+        "OVERNIGHT_LOCATION_UNRESOLVED",
+        "ROUTE_COORDINATE_INVALID",
+        "TRANSFER_TIME_ESTIMATED",
+        "TRANSPORT_COST_INCOMPLETE",
+        "WALKING_ROUTE_UNKNOWN"
+      ],
+      "travelSeconds": null,
+      "semanticRedundancy": 0.0,
+      "routeCalls": 4,
+      "searchMetrics": {
+        "baselineVisitCount": 2,
+        "finalVisitCount": 2,
+        "baselineTravelSeconds": null,
+        "finalTravelSeconds": null,
+        "attemptedMoves": 1,
+        "acceptedMoves": 1,
+        "baselinePreferenceScore": 1.94,
+        "finalPreferenceScore": 1.97,
+        "baselineAdjustedUtility": 1.94,
+        "finalAdjustedUtility": 1.97,
+        "baselineCategoryRepetitions": 0,
+        "finalCategoryRepetitions": 0,
+        "policyVersion": "alns-mmr-category-car40-walking-v3",
+        "utilityScreenedMoves": 1,
+        "attemptedMovesByPhase": {
+          "candidate_replace": 1
+        },
+        "acceptedMovesByPhase": {
+          "candidate_replace": 1
+        },
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "optimalityGuaranteed": false,
+        "searchEvaluationsUsed": 1,
+        "searchEvaluationsRemaining": 23
+      }
+    },
+    {
+      "case": "date_reallocation",
+      "variant": "alns_only",
+      "expectedFeasible": true,
+      "requestedVisits": 3,
+      "generated": true,
+      "visits": 3,
+      "visitIds": [
+        [
+          1
+        ],
+        [
+          2,
+          3
+        ]
+      ],
+      "knownViolations": 0,
+      "validationStatus": "unknown",
+      "unknownDomains": [
+        "route",
+        "walking",
+        "time",
+        "budget",
+        "openingHours"
+      ],
+      "warnings": [
+        "ARRIVAL_TIME_UNKNOWN",
+        "MEAL_SLOT_UNFILLED",
+        "OPENING_HOURS_UNKNOWN",
+        "OTHER_TRAVEL_EXPENSES_UNKNOWN",
+        "OVERNIGHT_LOCATION_UNRESOLVED",
+        "ROUTE_COORDINATE_INVALID",
+        "TRANSFER_TIME_ESTIMATED",
+        "TRANSPORT_COST_INCOMPLETE",
+        "WALKING_ROUTE_UNKNOWN"
+      ],
+      "travelSeconds": null,
+      "semanticRedundancy": 0.0,
+      "routeCalls": 8,
+      "searchMetrics": {
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "baselineVisitCount": 3,
+        "finalVisitCount": 3,
+        "attemptedMoves": 0,
+        "acceptedMoves": 0,
+        "feasibleCandidates": 14,
+        "destroyOperatorsTried": {
+          "seeded_random": 8,
+          "low_utility_related": 10,
+          "related": 6
+        },
+        "repairOperatorsTried": {
+          "alternative_first": 12,
+          "greedy": 12
+        },
+        "destroyOperatorWeights": {
+          "low_utility_related": 0.428,
+          "related": 1.0,
+          "seeded_random": 1.1055
+        },
+        "repairOperatorWeights": {
+          "greedy": 0.7803,
+          "alternative_first": 0.8154
+        },
+        "outcomes": {
+          "feasible": 14,
+          "infeasible:ScheduleWindowError": 10,
+          "infeasible": 10
+        },
+        "optimalityGuaranteed": false,
+        "strictBaselineChecks": 1,
+        "searchEvaluationsUsed": 24,
+        "searchEvaluationsRemaining": 0,
+        "baselineTravelSeconds": null,
+        "finalTravelSeconds": null,
+        "baselinePreferenceScore": 2.91,
+        "finalPreferenceScore": 2.91,
+        "baselineAdjustedUtility": 2.91,
+        "finalAdjustedUtility": 2.91,
+        "baselineCategoryRepetitions": 0,
+        "finalCategoryRepetitions": 0,
+        "policyVersion": "alns-mmr-category-car40-walking-v3",
+        "utilityScreenedMoves": 0,
+        "attemptedMovesByPhase": {},
+        "acceptedMovesByPhase": {},
+        "fallback": "SEARCH_BUDGET_REACHED",
+        "alns": {
+          "method": "adaptive-large-neighborhood-repair",
+          "baselineVisitCount": 3,
+          "finalVisitCount": 3,
+          "attemptedMoves": 24,
+          "acceptedMoves": 0,
+          "feasibleCandidates": 14,
+          "destroyOperatorsTried": {
+            "seeded_random": 8,
+            "low_utility_related": 10,
+            "related": 6
+          },
+          "repairOperatorsTried": {
+            "alternative_first": 12,
+            "greedy": 12
+          },
+          "destroyOperatorWeights": {
+            "low_utility_related": 0.428,
+            "related": 1.0,
+            "seeded_random": 1.1055
+          },
+          "repairOperatorWeights": {
+            "greedy": 0.7803,
+            "alternative_first": 0.8154
+          },
+          "outcomes": {
+            "feasible": 14,
+            "infeasible:ScheduleWindowError": 10,
+            "infeasible": 10
+          },
+          "optimalityGuaranteed": false,
+          "strictBaselineChecks": 1,
+          "searchEvaluationsUsed": 24,
+          "searchEvaluationsRemaining": 0
+        },
+        "combinedMethod": "adaptive-large-neighborhood-then-local-search"
+      }
+    },
+    {
+      "case": "date_reallocation",
+      "variant": "semantic_only",
+      "expectedFeasible": true,
+      "requestedVisits": 3,
+      "generated": true,
+      "visits": 2,
+      "visitIds": [
+        [
+          1
+        ],
+        [
+          2
+        ]
+      ],
+      "knownViolations": 0,
+      "validationStatus": "unknown",
+      "unknownDomains": [
+        "route",
+        "walking",
+        "time",
+        "budget",
+        "openingHours"
+      ],
+      "warnings": [
+        "ARRIVAL_TIME_UNKNOWN",
+        "MEAL_SLOT_UNFILLED",
+        "OPENING_HOURS_UNKNOWN",
+        "OTHER_TRAVEL_EXPENSES_UNKNOWN",
+        "OVERNIGHT_LOCATION_UNRESOLVED",
+        "ROUTE_COORDINATE_INVALID",
+        "TRANSFER_TIME_ESTIMATED",
+        "TRANSPORT_COST_INCOMPLETE",
+        "WALKING_ROUTE_UNKNOWN"
+      ],
+      "travelSeconds": null,
+      "semanticRedundancy": 0.0,
+      "routeCalls": 4,
+      "searchMetrics": {
+        "baselineVisitCount": 2,
+        "finalVisitCount": 2,
+        "baselineTravelSeconds": null,
+        "finalTravelSeconds": null,
+        "attemptedMoves": 1,
+        "acceptedMoves": 1,
+        "baselinePreferenceScore": 1.94,
+        "finalPreferenceScore": 1.97,
+        "baselineAdjustedUtility": 1.94,
+        "finalAdjustedUtility": 1.97,
+        "baselineCategoryRepetitions": 0,
+        "finalCategoryRepetitions": 0,
+        "policyVersion": "alns-mmr-category-car40-walking-v3",
+        "utilityScreenedMoves": 1,
+        "attemptedMovesByPhase": {
+          "candidate_replace": 1
+        },
+        "acceptedMovesByPhase": {
+          "candidate_replace": 1
+        },
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "optimalityGuaranteed": false,
+        "searchEvaluationsUsed": 1,
+        "searchEvaluationsRemaining": 23
+      }
+    },
+    {
+      "case": "date_reallocation",
+      "variant": "combined",
+      "expectedFeasible": true,
+      "requestedVisits": 3,
+      "generated": true,
+      "visits": 3,
+      "visitIds": [
+        [
+          1
+        ],
+        [
+          2,
+          3
+        ]
+      ],
+      "knownViolations": 0,
+      "validationStatus": "unknown",
+      "unknownDomains": [
+        "route",
+        "walking",
+        "time",
+        "budget",
+        "openingHours"
+      ],
+      "warnings": [
+        "ARRIVAL_TIME_UNKNOWN",
+        "MEAL_SLOT_UNFILLED",
+        "OPENING_HOURS_UNKNOWN",
+        "OTHER_TRAVEL_EXPENSES_UNKNOWN",
+        "OVERNIGHT_LOCATION_UNRESOLVED",
+        "ROUTE_COORDINATE_INVALID",
+        "TRANSFER_TIME_ESTIMATED",
+        "TRANSPORT_COST_INCOMPLETE",
+        "WALKING_ROUTE_UNKNOWN"
+      ],
+      "travelSeconds": null,
+      "semanticRedundancy": 0.0,
+      "routeCalls": 8,
+      "searchMetrics": {
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "baselineVisitCount": 3,
+        "finalVisitCount": 3,
+        "attemptedMoves": 0,
+        "acceptedMoves": 0,
+        "feasibleCandidates": 14,
+        "destroyOperatorsTried": {
+          "seeded_random": 8,
+          "low_utility_related": 10,
+          "related": 6
+        },
+        "repairOperatorsTried": {
+          "alternative_first": 12,
+          "greedy": 12
+        },
+        "destroyOperatorWeights": {
+          "low_utility_related": 0.428,
+          "related": 1.0,
+          "seeded_random": 1.1055
+        },
+        "repairOperatorWeights": {
+          "greedy": 0.7803,
+          "alternative_first": 0.8154
+        },
+        "outcomes": {
+          "feasible": 14,
+          "infeasible:ScheduleWindowError": 10,
+          "infeasible": 10
+        },
+        "optimalityGuaranteed": false,
+        "strictBaselineChecks": 1,
+        "searchEvaluationsUsed": 24,
+        "searchEvaluationsRemaining": 0,
+        "baselineTravelSeconds": null,
+        "finalTravelSeconds": null,
+        "baselinePreferenceScore": 2.91,
+        "finalPreferenceScore": 2.91,
+        "baselineAdjustedUtility": 2.91,
+        "finalAdjustedUtility": 2.91,
+        "baselineCategoryRepetitions": 0,
+        "finalCategoryRepetitions": 0,
+        "policyVersion": "alns-mmr-category-car40-walking-v3",
+        "utilityScreenedMoves": 0,
+        "attemptedMovesByPhase": {},
+        "acceptedMovesByPhase": {},
+        "fallback": "SEARCH_BUDGET_REACHED",
+        "alns": {
+          "method": "adaptive-large-neighborhood-repair",
+          "baselineVisitCount": 3,
+          "finalVisitCount": 3,
+          "attemptedMoves": 24,
+          "acceptedMoves": 0,
+          "feasibleCandidates": 14,
+          "destroyOperatorsTried": {
+            "seeded_random": 8,
+            "low_utility_related": 10,
+            "related": 6
+          },
+          "repairOperatorsTried": {
+            "alternative_first": 12,
+            "greedy": 12
+          },
+          "destroyOperatorWeights": {
+            "low_utility_related": 0.428,
+            "related": 1.0,
+            "seeded_random": 1.1055
+          },
+          "repairOperatorWeights": {
+            "greedy": 0.7803,
+            "alternative_first": 0.8154
+          },
+          "outcomes": {
+            "feasible": 14,
+            "infeasible:ScheduleWindowError": 10,
+            "infeasible": 10
+          },
+          "optimalityGuaranteed": false,
+          "strictBaselineChecks": 1,
+          "searchEvaluationsUsed": 24,
+          "searchEvaluationsRemaining": 0
+        },
+        "combinedMethod": "adaptive-large-neighborhood-then-local-search"
+      }
+    },
+    {
+      "case": "semantic_diversity",
+      "variant": "existing",
+      "expectedFeasible": true,
+      "requestedVisits": 2,
+      "generated": true,
+      "visits": 2,
+      "visitIds": [
+        [
+          1,
+          2
+        ]
+      ],
+      "knownViolations": 0,
+      "validationStatus": "unknown",
+      "unknownDomains": [
+        "budget"
+      ],
+      "warnings": [
+        "MEAL_SLOT_UNFILLED",
+        "OTHER_TRAVEL_EXPENSES_UNKNOWN"
+      ],
+      "travelSeconds": 900,
+      "semanticRedundancy": 1.0,
+      "routeCalls": 6,
+      "searchMetrics": {
+        "baselineVisitCount": 2,
+        "finalVisitCount": 2,
+        "baselineTravelSeconds": 900,
+        "finalTravelSeconds": 900,
+        "attemptedMoves": 1,
+        "acceptedMoves": 0,
+        "baselinePreferenceScore": 1.97,
+        "finalPreferenceScore": 1.97,
+        "baselineAdjustedUtility": 1.97,
+        "finalAdjustedUtility": 1.97,
+        "baselineCategoryRepetitions": 0,
+        "finalCategoryRepetitions": 0,
+        "policyVersion": "alns-mmr-category-car40-walking-v3",
+        "utilityScreenedMoves": 2,
+        "attemptedMovesByPhase": {
+          "two_opt": 1
+        },
+        "acceptedMovesByPhase": {},
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "optimalityGuaranteed": false,
+        "fallback": "NO_SAFE_IMPROVEMENT",
+        "searchEvaluationsUsed": 1,
+        "searchEvaluationsRemaining": 23
+      }
+    },
+    {
+      "case": "semantic_diversity",
+      "variant": "alns_only",
+      "expectedFeasible": true,
+      "requestedVisits": 2,
+      "generated": true,
+      "visits": 2,
+      "visitIds": [
+        [
+          1,
+          2
+        ]
+      ],
+      "knownViolations": 0,
+      "validationStatus": "unknown",
+      "unknownDomains": [
+        "budget"
+      ],
+      "warnings": [
+        "MEAL_SLOT_UNFILLED",
+        "OTHER_TRAVEL_EXPENSES_UNKNOWN"
+      ],
+      "travelSeconds": 900,
+      "semanticRedundancy": 1.0,
+      "routeCalls": 6,
+      "searchMetrics": {
+        "baselineVisitCount": 2,
+        "finalVisitCount": 2,
+        "baselineTravelSeconds": 900,
+        "finalTravelSeconds": 900,
+        "attemptedMoves": 1,
+        "acceptedMoves": 0,
+        "baselinePreferenceScore": 1.97,
+        "finalPreferenceScore": 1.97,
+        "baselineAdjustedUtility": 1.97,
+        "finalAdjustedUtility": 1.97,
+        "baselineCategoryRepetitions": 0,
+        "finalCategoryRepetitions": 0,
+        "policyVersion": "alns-mmr-category-car40-walking-v3",
+        "utilityScreenedMoves": 2,
+        "attemptedMovesByPhase": {
+          "two_opt": 1
+        },
+        "acceptedMovesByPhase": {},
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "optimalityGuaranteed": false,
+        "fallback": "NO_SAFE_IMPROVEMENT",
+        "searchEvaluationsUsed": 1,
+        "searchEvaluationsRemaining": 23
+      }
+    },
+    {
+      "case": "semantic_diversity",
+      "variant": "semantic_only",
+      "expectedFeasible": true,
+      "requestedVisits": 2,
+      "generated": true,
+      "visits": 2,
+      "visitIds": [
+        [
+          3,
+          2
+        ]
+      ],
+      "knownViolations": 0,
+      "validationStatus": "unknown",
+      "unknownDomains": [
+        "budget"
+      ],
+      "warnings": [
+        "MEAL_SLOT_UNFILLED",
+        "OTHER_TRAVEL_EXPENSES_UNKNOWN"
+      ],
+      "travelSeconds": 900,
+      "semanticRedundancy": 0.0,
+      "routeCalls": 9,
+      "searchMetrics": {
+        "baselineVisitCount": 2,
+        "finalVisitCount": 2,
+        "baselineTravelSeconds": 900,
+        "finalTravelSeconds": 900,
+        "attemptedMoves": 3,
+        "acceptedMoves": 1,
+        "baselinePreferenceScore": 1.97,
+        "finalPreferenceScore": 1.91,
+        "baselineAdjustedUtility": 1.77,
+        "finalAdjustedUtility": 1.91,
+        "baselineCategoryRepetitions": 0,
+        "finalCategoryRepetitions": 0,
+        "policyVersion": "alns-mmr-category-car40-walking-v3",
+        "utilityScreenedMoves": 0,
+        "attemptedMovesByPhase": {
+          "two_opt": 1,
+          "candidate_replace": 2
+        },
+        "acceptedMovesByPhase": {
+          "candidate_replace": 1
+        },
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "optimalityGuaranteed": false,
+        "searchEvaluationsUsed": 3,
+        "searchEvaluationsRemaining": 21
+      }
+    },
+    {
+      "case": "semantic_diversity",
+      "variant": "combined",
+      "expectedFeasible": true,
+      "requestedVisits": 2,
+      "generated": true,
+      "visits": 2,
+      "visitIds": [
+        [
+          3,
+          2
+        ]
+      ],
+      "knownViolations": 0,
+      "validationStatus": "unknown",
+      "unknownDomains": [
+        "budget"
+      ],
+      "warnings": [
+        "MEAL_SLOT_UNFILLED",
+        "OTHER_TRAVEL_EXPENSES_UNKNOWN"
+      ],
+      "travelSeconds": 900,
+      "semanticRedundancy": 0.0,
+      "routeCalls": 9,
+      "searchMetrics": {
+        "baselineVisitCount": 2,
+        "finalVisitCount": 2,
+        "baselineTravelSeconds": 900,
+        "finalTravelSeconds": 900,
+        "attemptedMoves": 3,
+        "acceptedMoves": 1,
+        "baselinePreferenceScore": 1.97,
+        "finalPreferenceScore": 1.91,
+        "baselineAdjustedUtility": 1.77,
+        "finalAdjustedUtility": 1.91,
+        "baselineCategoryRepetitions": 0,
+        "finalCategoryRepetitions": 0,
+        "policyVersion": "alns-mmr-category-car40-walking-v3",
+        "utilityScreenedMoves": 0,
+        "attemptedMovesByPhase": {
+          "two_opt": 1,
+          "candidate_replace": 2
+        },
+        "acceptedMovesByPhase": {
+          "candidate_replace": 1
+        },
+        "method": "bounded-2opt-relocate-toptw-inspired",
+        "optimalityGuaranteed": false,
+        "searchEvaluationsUsed": 3,
+        "searchEvaluationsRemaining": 21
+      }
+    },
+    {
+      "case": "impossible_appointments",
+      "variant": "existing",
+      "expectedFeasible": false,
+      "requestedVisits": 2,
+      "generated": false,
+      "visits": 0,
+      "knownViolations": null,
+      "travelSeconds": null,
+      "semanticRedundancy": null,
+      "validationStatus": null,
+      "unknownDomains": null,
+      "warnings": null,
+      "routeCalls": 1,
+      "searchMetrics": {}
+    },
+    {
+      "case": "impossible_appointments",
+      "variant": "alns_only",
+      "expectedFeasible": false,
+      "requestedVisits": 2,
+      "generated": false,
+      "visits": 0,
+      "knownViolations": null,
+      "travelSeconds": null,
+      "semanticRedundancy": null,
+      "validationStatus": null,
+      "unknownDomains": null,
+      "warnings": null,
+      "routeCalls": 3,
+      "searchMetrics": {
+        "method": "adaptive-large-neighborhood-repair",
+        "baselineVisitCount": 2,
+        "finalVisitCount": 2,
+        "attemptedMoves": 0,
+        "acceptedMoves": 0,
+        "feasibleCandidates": 0,
+        "destroyOperatorsTried": {},
+        "repairOperatorsTried": {},
+        "destroyOperatorWeights": {
+          "low_utility_related": 0.2,
+          "related": 0.2,
+          "seeded_random": 0.2
+        },
+        "repairOperatorWeights": {
+          "greedy": 1.0,
+          "alternative_first": 1.0
+        },
+        "outcomes": {},
+        "optimalityGuaranteed": false,
+        "strictBaselineChecks": 1,
+        "searchEvaluationsUsed": 0,
+        "searchEvaluationsRemaining": 24
+      }
+    },
+    {
+      "case": "impossible_appointments",
+      "variant": "semantic_only",
+      "expectedFeasible": false,
+      "requestedVisits": 2,
+      "generated": false,
+      "visits": 0,
+      "knownViolations": null,
+      "travelSeconds": null,
+      "semanticRedundancy": null,
+      "validationStatus": null,
+      "unknownDomains": null,
+      "warnings": null,
+      "routeCalls": 1,
+      "searchMetrics": {}
+    },
+    {
+      "case": "impossible_appointments",
+      "variant": "combined",
+      "expectedFeasible": false,
+      "requestedVisits": 2,
+      "generated": false,
+      "visits": 0,
+      "knownViolations": null,
+      "travelSeconds": null,
+      "semanticRedundancy": null,
+      "validationStatus": null,
+      "unknownDomains": null,
+      "warnings": null,
+      "routeCalls": 3,
+      "searchMetrics": {
+        "method": "adaptive-large-neighborhood-repair",
+        "baselineVisitCount": 2,
+        "finalVisitCount": 2,
+        "attemptedMoves": 0,
+        "acceptedMoves": 0,
+        "feasibleCandidates": 0,
+        "destroyOperatorsTried": {},
+        "repairOperatorsTried": {},
+        "destroyOperatorWeights": {
+          "low_utility_related": 0.2,
+          "related": 0.2,
+          "seeded_random": 0.2
+        },
+        "repairOperatorWeights": {
+          "greedy": 1.0,
+          "alternative_first": 1.0
+        },
+        "outcomes": {},
+        "optimalityGuaranteed": false,
+        "strictBaselineChecks": 1,
+        "searchEvaluationsUsed": 0,
+        "searchEvaluationsRemaining": 24
+      }
+    }
+  ]
+}
