@@ -23,7 +23,8 @@ def pipeline(request):
                    Column("adminCity", String), Column("mapx", String), Column("mapy", String),
                    Column("geoValidated", String))
     details = Table("place_details", metadata, Column("contentid", Integer), Column("planningStatusV2", String),
-                    Column("feeText", String), Column("openingHoursText", String))
+                    Column("feeText", String), Column("openingHoursText", String),
+                    Column("menuText", String), Column("experienceText", String))
     prefs_table = Table("place_preferences", metadata, Column("contentid", Integer),
                         Column("preferenceTags", String), Column("vibeTags", String))
     metadata.create_all(engine)
@@ -42,6 +43,20 @@ def pipeline(request):
                          "adminCity": "단양군", "mapx": "127.4342", "mapy": "36.6286", "geoValidated": "yes"})
             conn.execute(details.insert(), {"contentid": 33, "planningStatusV2": "candidate_needs_live_validation"})
             conn.execute(prefs_table.insert(), {"contentid": 33, "preferenceTags": "쇼핑"})
+        if getattr(request, "param", None) == "typed":
+            # The matching dish and activity occur only in public detail fields.
+            for cid, name, city, role, use, menu, experience in (
+                (51, "첫째 식당", "단양군", "meal_stop", "MEAL", "비빔밥", None),
+                (52, "둘째 식당", "단양군", "meal_stop", "MEAL", "청국장", None),
+                (53, "셋째 식당", "단양군", "meal_stop", "MEAL", "비빔막국수 / 메밀전", None),
+                (54, "배움터", "단양군", "activity_stop", "MAIN_DESTINATION", None, "숲길 걷기"),
+                (55, "다른 지역 식당", "제천시", "meal_stop", "MEAL", "물막국수", None),
+            ):
+                conn.execute(places.insert(), {"contentid": cid, "title": name, "adminCity": city,
+                             "planningRole": role, "recommendationUse": use, "geoValidated": "yes",
+                             "mapx": "127.4342", "mapy": "36.6286"})
+                conn.execute(details.insert(), {"contentid": cid, "planningStatusV2": "candidate_needs_live_validation",
+                             "menuText": menu, "experienceText": experience})
         catalog = load_place_catalog(conn)
     preferences = [{"memberRef": "p1", "likes": "자연", "avoid": None, "avoidImportance": "required",
                     "food": None, "foodImportance": "preferred", "walking": "20"}]
@@ -151,3 +166,62 @@ def test_confirmed_market_visit_reaches_canvas_when_the_provider_omits_it(pipeli
     canvas = replace_generated_plan({"schemaVersion": 4}, *(str(uuid.uuid4()) for _ in range(3)), plan)
     assert [node["contentid"] for node in canvas["nodes"]].count(33) == 1
     assert len(canvas["days"]) == 2 and not plan["validation"]["violations"]
+
+
+@pytest.mark.parametrize("pipeline", ["typed"], indirect=True)
+@pytest.mark.parametrize("draft_ids", [[51, 11, 52], [11, 22]])
+def test_ensemble_food_and_activity_survive_draft_omission_through_canvas(pipeline, draft_ids):
+    from chungbuk_trip_ai import interpret_personal_draft_v2
+    from app.canvas_import import replace_generated_plan
+    from app.day_schedule import build_scheduled_plan
+    from app.generation_service import _default_settings
+    from app.group_preferences import build_group_preferences
+    from app.route_preferences import compile_route_preferences
+    from test_routing_validation import Router
+
+    original, _, catalog, _ = pipeline
+    doc = original.as_dict()
+    doc["conditions"].update(endDate=doc["conditions"]["startDate"], departureContentid=11,
+                             transport="walk", returnRoute=None)
+    food = "여행 중 막국수를 적어도 한 번은 꼭 먹고 싶어"
+    activity = "숲길을 걷고 싶어"
+    source = f"{food}. {activity}."
+    base = {"polarity": "prefer", "scope": "trip", "audience": "personal",
+            "approximate": False, "value": None, "unit": None}
+    extraction = {"conditions": [
+        {**base, "dimension": "food", "target": "막국수", "evidence": food,
+         "priority": "required", "priorityBasis": "explicit",
+         "frequency": {"operator": "min", "period": "trip", "count": 1}},
+        {**base, "dimension": "activity", "target": "숲길", "evidence": activity,
+         "priority": "preferred", "priorityBasis": "unspecified", "frequency": None},
+    ], "unresolved": [], "scheduleItems": []}
+    analysis = interpret_personal_draft_v2(source, doc["conditions"], provider="ensemble",
+                  providers={name: lambda *_: extraction for name in ("gemini", "qwen")})
+    doc["atomicMemberRefs"] = ["p1"]
+    doc["groupConditions"] = build_group_preferences([
+        {"memberRef": "p1", "confirmed": True, "atomicPreferences": analysis["atomicPreferences"]},
+    ])
+    doc["confirmedPreferences"][0].update(likes=None, walking=None)
+    encoded = json.dumps(doc, ensure_ascii=False, sort_keys=True)
+    snapshot = ConfirmedPreparationSnapshot(encoded, hashlib.sha256(encoded.encode()).hexdigest())
+
+    def omit_requests(dates, candidates, fixed, maximum, schedule_context):
+        eligible_ids = {row["contentid"] for row in candidates}
+        assert {53, 54} <= eligible_ids and 55 not in eligible_ids
+        quotas = {tuple(rule["contentids"]): (rule["required"], rule["operator"], rule["count"])
+                  for rule in schedule_context["preferenceRules"]}
+        assert quotas == {(53,): (True, "min", 1), (54,): (False, "min", 1)}
+        wire = json.dumps([candidates, schedule_context], ensure_ascii=False)
+        for private in ("막국수", "숲길", "memberRef", "evidence"):
+            assert private not in wire
+        return {"days": [{"date": dates[0], "contentids": draft_ids}]}
+
+    draft = asyncio.run(generate_candidate_draft(
+        snapshot, None, catalog, None, lambda: snapshot, lambda: catalog, drafter=omit_requests)).as_dict()
+    settings = {**_default_settings(), "_routePreferences": compile_route_preferences(doc, catalog)}
+    plan = build_scheduled_plan(draft, catalog, doc["conditions"], doc["confirmedPreferences"], settings, Router())
+    canvas = replace_generated_plan({"schemaVersion": 4}, *(str(uuid.uuid4()) for _ in range(3)), plan)
+    ids = [node["contentid"] for node in canvas["nodes"] if node["kind"] == "place"]
+    assert 53 in ids and 54 in ids and 55 not in ids
+    assert not plan["validation"]["violations"]
+    assert "REQUIRED_PREFERENCE_UNVERIFIED" not in plan["validation"]["warnings"]

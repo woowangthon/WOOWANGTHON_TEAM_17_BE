@@ -13,12 +13,17 @@ import re
 from typing import Any
 
 from .confirmed_preferences import ALIASES, NEGATIVE, _clauses, analyze_preferences
+from .preference_retrieval import PreferenceResolver
 
 POLICY_VERSION = "atomic-route-v2"
 _TOURISM = {"sightseeing_stop", "culture_stop", "activity_stop", "shopping_stop", "date_specific_event"}
 _LODGING = {"overnight_lodging", "overnight_camping"}
 _MARKET_DIMENSIONS = {"activity", "place", "venue", "category", "place_type", "visit_count", "other"}
 _MARKET_TERMS = {"시장", "전통시장", "재래시장", "장터"}
+_TYPED_DIMENSIONS = {"food": "catalog_food", "activity": "catalog_activity",
+                     "place": "catalog_activity", "venue": "catalog_activity",
+                     "atmosphere": "catalog_atmosphere", "vibe": "catalog_atmosphere",
+                     "ambience": "catalog_atmosphere"}
 _LEGACY_MARKET_WISHES = {"시장", "전통시장", "재래시장", "장터",
                          "시장에가고싶어요", "전통시장에가고싶어요", "재래시장에가고싶어요",
                          "장터에가고싶어요", "시장방문하고싶어요", "전통시장방문하고싶어요",
@@ -148,6 +153,15 @@ def _matcher(atom: dict[str, Any], vocabulary: set[str]) -> tuple[str, str | Non
         return "market", None
     tag = target if target in vocabulary else next(
         (name for name, aliases in ALIASES.items() if name in vocabulary and target in aliases), None)
+    if tag is None and isinstance(target, str):
+        # A small exact equivalence bridge handles real imported tag spellings
+        # such as 휴식힐링 and the Korean 돈까스/돈가스/돈카츠 variants.
+        from .preference_retrieval import _FOOD_EQUIVALENTS, _compact
+        target_key = _compact(target)
+        tag = next((name for name in sorted(vocabulary) if _compact(name) in {
+            _compact(alias) for alias in _FOOD_EQUIVALENTS.get(target_key, ())}), None)
+        if tag is None and target_key in {"휴식", "휴양", "힐링", "휴식힐링", "휴양힐링"}:
+            tag = next((name for name in sorted(vocabulary) if _compact(name) in {"휴식", "휴양", "힐링", "휴식힐링", "휴양힐링"}), None)
     if tag is None:
         return None
     if dimension == "food":
@@ -155,6 +169,13 @@ def _matcher(atom: dict[str, Any], vocabulary: set[str]) -> tuple[str, str | Non
     if dimension in {"activity", "visit_count"}:
         return "tag_activity", tag
     return "tag", tag
+
+
+def _tag_candidate_ids(kind: str | None, tag: str, places: dict[int, dict[str, Any]],
+                       catalog_tags: dict[int, set[str] | None]) -> set[int]:
+    return {cid for cid, facts in catalog_tags.items() if facts is not None and tag in facts
+            and cid in places and (kind != "tag_food" or places[cid].get("planningRole") == "meal_stop")
+            and (kind != "tag_activity" or places[cid].get("planningRole") in _TOURISM)}
 
 
 def _three_meal_periods(target: Any) -> bool:
@@ -167,6 +188,14 @@ def _three_meal_periods(target: Any) -> bool:
 def compile_route_preferences(snapshot_doc: dict[str, Any], catalog: Any) -> dict[str, Any]:
     """Compile trusted current group atoms into bounded count/walking rules."""
     places, catalog_tags, vocab = _catalog_facts(catalog)
+    resolver: PreferenceResolver | None = None
+
+    def preference_resolver() -> PreferenceResolver:
+        nonlocal resolver
+        if resolver is None:
+            resolver = PreferenceResolver(catalog)
+        return resolver
+
     supported = set(getattr(catalog, "supported_tags", ()) or ()) | vocab
     refs = snapshot_doc.get("atomicMemberRefs", []) if isinstance(snapshot_doc, dict) else []
     atomic_refs = sorted({x for x in refs if isinstance(x, str) and x}) if isinstance(refs, list) else []
@@ -230,10 +259,36 @@ def compile_route_preferences(snapshot_doc: dict[str, Any], catalog: Any) -> dic
                 continue
             if polarity not in {"prefer", "limit"}:
                 matcher = _matcher(atom, supported)
+                resolved = (preference_resolver().resolve(atom.get("target"), dimension)
+                            if dimension in _TYPED_DIMENSIONS else None)
                 if not hard and polarity == "avoid" and matcher is not None and matcher[1] is not None:
-                    predicates.append({"memberRef": ref, "field": field, "tag": matcher[1], "polarity": "avoid",
-                                       "scope": "meal" if dimension == "food" else "all", "required": False})
+                    base = _tag_candidate_ids(matcher[0], matcher[1], places, catalog_tags)
+                    predicate = {"memberRef": ref, "field": field, "tag": matcher[1], "polarity": "avoid",
+                                 "scope": "meal" if dimension == "food" else "all", "required": False}
+                    if resolved is not None:
+                        negative = set(preference_resolver().known_contentids(atom.get("target"), dimension) or [])
+                        contradicted = set(preference_resolver().contradicted_contentids(atom.get("target"), dimension) or [])
+                        discard = negative | contradicted
+                        grounded = set(resolved or []) - discard
+                        tagged = base - discard
+                        short_food = dimension == "food" and _compact_korean(atom.get("target")) == "회"
+                        if grounded - tagged or discard & base or short_food:
+                            predicate.update({"contentids": sorted((grounded | tagged) if not short_food else grounded),
+                                              "sourceDimension": dimension, "target": atom.get("target")})
+                    predicates.append(predicate)
                     continue
+                if not hard and polarity == "avoid" and resolved is not None:
+                    source_kind = {"food": "catalog_food", "activity": "catalog_activity",
+                                   "place": "catalog_activity", "venue": "catalog_activity",
+                                   "atmosphere": "catalog_atmosphere", "vibe": "catalog_atmosphere",
+                                   "ambience": "catalog_atmosphere"}.get(dimension)
+                    if source_kind is not None:
+                        tag = matcher[1] if matcher is not None else None
+                        predicates.append({"memberRef": ref, "field": field, "tag": tag,
+                                           "contentids": resolved, "sourceDimension": dimension,
+                                           "target": atom.get("target"), "polarity": "avoid",
+                                           "scope": "meal" if dimension == "food" else "all", "required": False})
+                        continue
                 (issues if hard else warnings).append({"field": field, "code": "REQUIRED_PREFERENCE_UNSUPPORTED" if hard else "ATOMIC_PREFERENCE_UNSUPPORTED"})
                 continue
             frequency = _frequency(atom)
@@ -271,18 +326,61 @@ def compile_route_preferences(snapshot_doc: dict[str, Any], catalog: Any) -> dic
                                     "scope": frequency["period"], "operator": frequency["operator"],
                                     "count": frequency["count"], "required": hard, "polarity": "prefer"})
                 continue
-            unsupported = (matcher is None or (hard and (approximate or dimension == "accessibility"
+            typed_kind = _TYPED_DIMENSIONS.get(dimension)
+            resolved = (preference_resolver().resolve(atom.get("target"), dimension)
+                        if typed_kind is not None else None)
+            typed_ids = None
+            typed_frequency_safe = (polarity == "prefer" or
+                                    (polarity == "limit" and frequency is not None
+                                     and frequency["operator"] in {"max", "exact"}))
+            if typed_kind and resolved is not None and typed_frequency_safe:
+                # Exact tag support remains the established representation
+                # unless public title/menu/description evidence adds candidates.
+                base_kind, base_tag = matcher if matcher is not None else (None, None)
+                negative_ids = set(preference_resolver().known_contentids(atom.get("target"), dimension) or [])
+                contradicted_ids = set(preference_resolver().contradicted_contentids(atom.get("target"), dimension) or [])
+                excluded_ids = negative_ids | contradicted_ids
+                grounded_ids = set(resolved) - excluded_ids
+                if base_tag is not None:
+                    base_ids = _tag_candidate_ids(base_kind, base_tag, places, catalog_tags)
+                    filtered_base = base_ids - excluded_ids
+                    short_food = dimension == "food" and _compact_korean(atom.get("target")) == "회"
+                    if grounded_ids - filtered_base or excluded_ids & base_ids or short_food:
+                        typed_ids = sorted((grounded_ids | filtered_base) if not short_food else grounded_ids)
+                elif matcher is None:
+                    typed_ids = sorted(grounded_ids)
+            unsupported = ((matcher is None and typed_ids is None) or (hard and (approximate or dimension == "accessibility"
                            or scope is None or frequency is not None and frequency["operator"] == "target")))
             if unsupported:
                 (issues if hard else warnings).append({"field": field, "code": "REQUIRED_PREFERENCE_UNSUPPORTED" if hard else "ATOMIC_PREFERENCE_UNSUPPORTED"})
                 continue
-            kind, tag = matcher
+            if typed_ids is not None:
+                kind = typed_kind
+                tag = matcher[1] if matcher is not None else None
+            else:
+                kind, tag = matcher
             if frequency is None and hard and polarity == "prefer":
                 frequency = {"operator": "min", "count": 1, "period": scope}
             if frequency is not None:
-                count_rules.append({"memberRef": ref, "dimension": kind, "tag": tag, "scope": frequency["period"],
-                                    "operator": frequency["operator"], "count": frequency["count"],
-                                    "required": hard, "polarity": polarity})
+                rule = {"memberRef": ref, "dimension": kind, "tag": tag, "scope": frequency["period"],
+                        "operator": frequency["operator"], "count": frequency["count"],
+                        "required": hard, "polarity": polarity}
+                if typed_ids is not None:
+                    known_ids = preference_resolver().known_contentids(atom.get("target"), dimension) or []
+                    rule.update({"contentids": typed_ids, "knownContentids": known_ids,
+                                 "sourceDimension": dimension, "target": atom.get("target")})
+                count_rules.append(rule)
+            elif typed_ids is not None and polarity == "prefer":
+                predicates.append({"memberRef": ref, "field": field, "tag": tag, "contentids": typed_ids,
+                                   "sourceDimension": dimension, "target": atom.get("target"),
+                                   "polarity": "prefer", "scope": "meal" if dimension == "food" else "all",
+                                   "required": False})
+                count_rules.append({"memberRef": ref, "dimension": kind, "tag": tag,
+                                    "contentids": typed_ids,
+                                    "knownContentids": preference_resolver().known_contentids(atom.get("target"), dimension) or [],
+                                    "sourceDimension": dimension, "target": atom.get("target"),
+                                    "scope": scope or "trip", "operator": "min", "count": 1,
+                                    "required": False, "polarity": "prefer"})
             elif polarity == "prefer" and tag is not None:
                 predicates.append({"memberRef": ref, "field": field, "tag": tag, "polarity": "prefer",
                                    "scope": "meal" if dimension == "food" else "all", "required": False})
@@ -337,6 +435,19 @@ def _place_count(place: dict[str, Any], rule: dict[str, Any], roles: dict[int, s
     role = roles.get(cid, place.get("planningRole"))
     if role in _LODGING:
         return 0, True
+    if "contentids" in rule:
+        ids = rule.get("contentids")
+        dimension = rule.get("dimension")
+        if dimension == "catalog_food" and role != "meal_stop":
+            return 0, True
+        if dimension == "catalog_activity" and role not in _TOURISM:
+            return 0, True
+        if dimension == "catalog_atmosphere" and role is not None and role not in _TOURISM | {"meal_stop"}:
+            return 0, True
+        if type(cid) is int and isinstance(ids, list) and cid in ids:
+            return 1, True
+        verified_absence = rule.get("knownContentids")
+        return 0, isinstance(verified_absence, list) and type(cid) is int and cid in verified_absence
     if rule.get("dimension") == "meals":
         return (1, True) if role == "meal_stop" else (0, True)
     if rule.get("dimension") == "market":
@@ -453,9 +564,14 @@ def route_preference_cost(draft: dict[str, Any], compiled: dict[str, Any], catal
             seen_market_rules.add(identity)
         if rule.get("required"):
             continue
+        if "contentids" in rule and not rule.get("contentids"):
+            # No positive record exists for this soft query. It contributes no
+            # objective and does not make the whole trial unverified.
+            continue
         for _section, count, known in _rule_counts(draft, rule, roles, facts, market_ids, set()):
             target = rule["count"]
-            if not known and not (rule["operator"] == "min" and count >= target):
+            if ("contentids" not in rule and not known
+                    and not (rule["operator"] == "min" and count >= target)):
                 unverified += 1
                 continue
             if rule["operator"] == "min":
@@ -489,22 +605,25 @@ def route_preference_penalty(draft: dict[str, Any], compiled: dict[str, Any], ca
 
 def draft_preference_rules(compiled: dict[str, Any], catalog: Any, candidate_ids: list[int]) -> list[dict[str, Any]]:
     """Resolve bounded count rules to eligible IDs for the draft prompt."""
-    places, facts, _ = _catalog_facts(catalog)
-    market_ids = _requested_market_ids(compiled, places, facts)
+    places = facts = market_ids = None
     allowed = {cid for cid in candidate_ids if type(cid) is int}
     rules = []
     for rule in compiled.get("countRules", []):
-        if rule.get("dimension") == "market":
-            ids = [cid for cid in sorted(allowed) if cid in places and cid in market_ids]
-        elif rule.get("dimension") == "sightseeing":
-            ids = [cid for cid in sorted(allowed) if cid in places and places[cid].get("planningRole") in _TOURISM]
-        elif rule.get("dimension") == "meals":
-            ids = [cid for cid in sorted(allowed) if cid in places and places[cid].get("planningRole") == "meal_stop"]
+        if "contentids" in rule:
+            ids = sorted(allowed.intersection(cid for cid in rule.get("contentids", []) if type(cid) is int))
         else:
-            ids = [cid for cid in sorted(allowed) if cid in places and facts.get(cid) is not None
-                   and rule.get("tag") in facts[cid]
-                   and (rule.get("dimension") != "tag_food" or places[cid].get("planningRole") == "meal_stop")
-                   and (rule.get("dimension") != "tag_activity" or places[cid].get("planningRole") in _TOURISM)]
+            if places is None:
+                places, facts, _ = _catalog_facts(catalog)
+                market_ids = _requested_market_ids(compiled, places, facts)
+            dimension = rule.get("dimension")
+            if dimension == "market":
+                ids = sorted(allowed & market_ids)
+            elif dimension == "sightseeing":
+                ids = [cid for cid in sorted(allowed) if cid in places and places[cid].get("planningRole") in _TOURISM]
+            elif dimension == "meals":
+                ids = [cid for cid in sorted(allowed) if cid in places and places[cid].get("planningRole") == "meal_stop"]
+            else:
+                ids = sorted(allowed & _tag_candidate_ids(dimension, rule.get("tag"), places, facts))
         if not ids:
             continue
         rules.append({"contentids": ids, "period": rule["scope"], "operator": rule["operator"],

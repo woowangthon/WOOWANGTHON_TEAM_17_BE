@@ -117,7 +117,7 @@ def _category_repetitions(draft: dict[str, Any], candidates: dict[int, dict[str,
 
 def _rank(draft: dict[str, Any], plan: dict[str, Any], candidates: dict[int, dict[str, Any]],
           anchors: set[tuple[str, int]] | None = None, semantic_context: Any = None, *, activity_window=None,
-          route_preferences=None, catalog=None):
+          route_preferences=None, catalog=None, required_visits=()):
     travel = _travel_seconds(plan)
     meal_deviation = meal_deviation_minutes(plan, candidates, anchors, activity_window=activity_window)
     # Unknown routes are never assigned a zero cost or treated as an improvement.
@@ -125,8 +125,18 @@ def _rank(draft: dict[str, Any], plan: dict[str, Any], candidates: dict[int, dic
     if route_preferences is not None and catalog is not None:
         from .route_preferences import route_preference_cost
         unknown_quotas, quota_penalty = route_preference_cost(plan, route_preferences, catalog)
+    # A trip with an unverified mandatory preference cannot be saved. A verified
+    # witness takes precedence over utility differences between eligible venues.
+    missing_visits = 0
+    for ids, period, count in required_visits:
+        counts = [sum(place["contentid"] in ids for place in day["places"]) for day in draft["days"]]
+        if period == "trip":
+            counts = [sum(counts)]
+        missing_visits += sum(max(0, count - observed) for observed in counts)
     return (sum(_violations(plan).values()),
-            (unknown_quotas, quota_penalty - _preference_score(draft, candidates, anchors, semantic_context)),
+            ("REQUIRED_PREFERENCE_UNVERIFIED" in plan["validation"].get("warnings", ()),
+             missing_visits, unknown_quotas,
+             quota_penalty - _preference_score(draft, candidates, anchors, semantic_context)),
             meal_deviation if meal_deviation is not None else float("inf"),
             travel if travel is not None else float("inf"))
 
@@ -201,23 +211,51 @@ def _requested_visit_swaps(current, pool, anchors, rules):
     visits = [[p["contentid"] for p in day["places"]] for day in days]
     used = {cid for day_ids in visits for cid in day_ids}
     trials = {}
-    for rule in rules:
+    for rule in sorted(rules, key=lambda item: not item["required"]):
+        if len(trials) >= 128:
+            break
         matches = set(rule["contentids"])
         daily_counts = [sum(cid in matches for cid in day_ids) for day_ids in visits]
         trip_count = sum(daily_counts)
+        trip_deficit = max(0, rule["count"] - trip_count)
+        if rule["period"] != "day" and not trip_deficit:
+            continue
+        made_trip_options = 0
         for index, day in enumerate(days):
             covered = daily_counts[index] if rule["period"] == "day" else trip_count
             if covered >= rule["count"]:
                 continue
-            candidates = [pool[cid] for cid in matches - used if day["date"] in pool[cid].get("allowedDates", dates)]
+            candidates = [pool[cid] for cid in matches - used
+                          if day["date"] in pool[cid].get("allowedDates", dates)]
+            # A draft can omit meals entirely. Allow a required meal to occupy a
+            # flexible visit on that day; dates, anchors and quotas are rechecked.
+            needs_meal_slot = rule["required"] and not any(
+                pool.get(cid, {}).get("planningRole") == "meal_stop" and cid not in matches
+                and (day["date"], cid) not in anchors for cid in visits[index])
             for position, old_id in enumerate(visits[index]):
                 old = pool.get(old_id)
-                if (not old or old.get("planningRole") not in _FLEXIBLE_ROLES or old_id in matches
+                old_role = old.get("planningRole") if old else None
+                if (old_role not in _FLEXIBLE_ROLES | {"meal_stop"} or old_id in matches
                         or (day["date"], old_id) in anchors):
                     continue
-                for row in candidates:
+                compatible = [row for row in candidates
+                              if ((old_role == "meal_stop" and row.get("planningRole") == "meal_stop")
+                                  or (needs_meal_slot and old_role in _FLEXIBLE_ROLES
+                                      and row.get("planningRole") == "meal_stop")
+                                  or (old_role in _FLEXIBLE_ROLES and row.get("planningRole") in _FLEXIBLE_ROLES))]
+                compatible.sort(key=lambda row: (place_distance_km(old, row),
+                                                 row.get("selectionRank", 0), row["contentid"]))
+                for row in compatible[:8]:
                     key = (index, position, row["contentid"])
-                    trials[key] = (place_distance_km(old, row), row.get("selectionRank", 0), key)
+                    priority = (not rule["required"], place_distance_km(old, row), row.get("selectionRank", 0), key)
+                    trials[key] = min(trials.get(key, priority), priority)
+                    made_trip_options += 1
+                    if len(trials) >= 128 or (rule["period"] != "day" and made_trip_options >= max(8, 8 * trip_deficit)):
+                        break
+                if len(trials) >= 128 or (rule["period"] != "day" and made_trip_options >= max(8, 8 * trip_deficit)):
+                    break
+            if len(trials) >= 128 or (rule["period"] != "day" and made_trip_options >= max(8, 8 * trip_deficit)):
+                break
     for index, position, cid in sorted(trials, key=trials.get):
         yield "requested_visit", _replace_stop(current, index, position, pool[cid])
 
@@ -357,8 +395,6 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
     anchors = _anchored_positions(settings)
     anchor_ids = set(anchors)
     activity_window = current_settings.get("activityWindow") or settings.get("activityWindow")
-    current_rank = _rank(current_draft, current_plan, pool, anchor_ids, semantic_context,
-                         activity_window=activity_window, route_preferences=route_preferences, catalog=catalog)
     attempted = accepted = 0
     utility_screened = 0
     attempted_by_phase = Counter()
@@ -370,11 +406,20 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
     requested_rules = []
     if route_preferences and catalog is not None:
         from .route_preferences import draft_preference_rules
-        market_goals = [rule for rule in route_preferences.get("countRules", [])
-                        if rule.get("dimension") == "market" and rule["operator"] in {"min", "exact", "target"}
-                        and rule["count"] > 0]
-        if market_goals:
-            requested_rules = draft_preference_rules({"countRules": market_goals}, catalog, list(pool))
+        requested_goals = [rule for rule in route_preferences.get("countRules", [])
+                           if rule.get("dimension") in {"market", "catalog_food", "catalog_activity", "catalog_atmosphere",
+                                                       "tag_food", "tag_activity", "tag"}
+                           and (rule.get("polarity", "prefer") == "prefer"
+                                or (rule.get("polarity") == "limit" and rule.get("operator") == "exact"))
+                           and rule.get("operator") in {"min", "exact", "target"}
+                           and type(rule.get("count")) is int and rule["count"] > 0]
+        if requested_goals:
+            requested_rules = draft_preference_rules({"countRules": requested_goals}, catalog, list(pool))
+    required_visits = [(set(rule["contentids"]), rule["period"], rule["count"])
+                       for rule in requested_rules if rule["required"]]
+    current_rank = _rank(current_draft, current_plan, pool, anchor_ids, semantic_context,
+                         activity_window=activity_window, route_preferences=route_preferences, catalog=catalog,
+                         required_visits=required_visits)
     neighbors = _neighbors(current_draft, pool, anchors, max_visits_per_day, semantic_context, requested_rules)
     while True:
         if attempted >= max_evaluations or time.monotonic() >= deadline:
@@ -426,7 +471,7 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
             continue
         new_rank = _rank(scheduled, plan, pool, anchor_ids, semantic_context,
                          activity_window=adjusted.get("activityWindow") or activity_window,
-                         route_preferences=route_preferences, catalog=catalog)
+                         route_preferences=route_preferences, catalog=catalog, required_visits=required_visits)
         if new_rank < current_rank:
             current_draft, current_plan, current_settings = scheduled, plan, adjusted
             current_rank = new_rank

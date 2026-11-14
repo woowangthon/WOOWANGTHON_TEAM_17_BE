@@ -53,7 +53,8 @@ def _digest(value: Any) -> str:
 
 def _predicate_identity(item: dict[str, Any]) -> tuple[Any, ...]:
     return (item.get("memberRef"), item.get("tag"), item.get("polarity"),
-            item.get("scope"), item.get("required"))
+            item.get("scope"), item.get("required"), item.get("sourceDimension"),
+            tuple(item.get("contentids", [])) if isinstance(item.get("contentids"), list) else None)
 
 
 def normalization_digest(result: Any) -> str:
@@ -339,12 +340,6 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                         unresolved.append("REQUIRED_TERM_REVIEW_REQUIRED")
         predicates = [] if confirmed_evidence is None else [dict(x) for x in confirmed_evidence.get("predicates", [])]
         route_count_rules = route_preferences.get("countRules", []) if isinstance(route_preferences, dict) else []
-        market_rules = [rule for rule in route_count_rules
-                        if isinstance(rule, dict)
-                        and rule.get("dimension") == "market" and rule.get("polarity") == "prefer"
-                        and rule.get("operator") in {"min", "exact", "target"}
-                        and type(rule.get("count")) is int and rule["count"] > 0]
-        market_match_ids: set[int] = set()
         for i in accepted:
             t = terms[i]
             rf = next((x for x in reviewed_fields if x["memberRef"] == t["memberRef"] and x["field"] == t["field"] and i in x["termIndexes"]), None)
@@ -354,7 +349,10 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
             predicates.append({"memberRef": t["memberRef"], "tag": t["tag"], "polarity": t["polarity"], "scope": rf["scope"], "required": p.get(t["field"] + "Importance") == "required" if t["field"] in {"avoid", "food"} else False})
         # Repeated evidence for the same member/tag/polarity/scope is one
         # predicate, so model duplication cannot amplify one member's weight.
-        predicates = list({(p["memberRef"], p["tag"], p["polarity"], p["scope"], p["required"]): p for p in predicates}.values())
+        predicates = list({_predicate_identity(p): p for p in predicates}.values())
+        for predicate in predicates:
+            if isinstance(predicate.get("contentids"), list):
+                predicate["contentids"] = frozenset(predicate["contentids"])
         # Every required source field needs a reviewed accepted predicate.
         for ref, fld, _ in required_fields if confirmed_evidence is None else []:
             if not reviewed_map.get((ref, fld)):
@@ -481,20 +479,17 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                 use = place.get("recommendationUse")
                 applies = pred["scope"] == "all" or use == SCOPE_USE[pred["scope"]]
                 if not applies: continue
-                present = pred["tag"] in tags
-                absence = (cid, pred["tag"]) in absences
+                typed_ids = pred.get("contentids")
+                present = cid in typed_ids if typed_ids is not None else pred["tag"] in tags
+                absence = (cid, pred["tag"]) in absences if isinstance(pred.get("tag"), str) else False
                 if pred["required"]:
                     if pred["polarity"] == "avoid": violated |= present; unknown_required |= not present and not absence
                     else: violated |= (not present and absence); unknown_required |= not present and not absence
                     continue
-                if not present and not absence:
+                if not present and not absence and isinstance(pred.get("tag"), str):
                     unknown_terms.append({"memberRef": pred["memberRef"], "tag": pred["tag"], "polarity": pred["polarity"], "scope": pred["scope"]})
                 score = 1 if pred["polarity"] == "prefer" and present else -1 if pred["polarity"] == "avoid" and present else 0
                 member_scores.setdefault(pred["memberRef"], []).append(score)
-            if market_rules:
-                from .route_preferences import is_market_place
-                if is_market_place(place, tags):
-                    market_match_ids.add(cid)
             for p in prefs:
                 vals = member_scores.get(p["memberRef"], [])
                 member_scores[p["memberRef"]] = sum(vals) / len(vals) if vals else 0.0
@@ -541,7 +536,7 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                 if len(selected) < maxc:
                     selected[cid] = eligible_by_id[cid]
         protected_ids = set(anchor_ids)
-        soft_market_ids: set[int] = set()
+        soft_goal_ids: set[int] = set()
         if isinstance(route_preferences, dict):
             from .route_preferences import draft_preference_rules
             candidate_ids = list(eligible_by_id)
@@ -609,13 +604,13 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                 return (-int(cid in required_ids), -coverage.get(cid, 0),
                         -row["minimumMemberScore"], -row["groupScore"], cid)
 
-            def assign_slots(slots, options_by_date):
+            def assign_slots(slots, options_by_date, priority):
                 assignment: dict[int, int] = {}
                 assigned_slot_by_id: dict[int, int] = {}
 
                 def assign(slot_index: int, seen: set[int]) -> bool:
                     day = slots[slot_index]
-                    for cid in sorted(options_by_date[day], key=candidate_key):
+                    for cid in sorted(options_by_date[day], key=priority):
                         if cid in seen:
                             continue
                         seen.add(cid)
@@ -638,7 +633,7 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
 
                 slots = list(spec["slots"])
                 slots.sort(key=lambda day: (len(spec["optionsByDate"][day]), day))
-                assignment = assign_slots(slots, spec["optionsByDate"])
+                assignment = assign_slots(slots, spec["optionsByDate"], candidate_key)
                 if len(assignment) < len(slots):
                     unresolved.append("REQUIRED_PREFERENCE_UNSATISFIED")
                 required_ids.update(assignment.values())
@@ -662,29 +657,62 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                     selected[cid] = eligible_by_id[cid]
                 else:
                     unresolved.append("REQUIRED_PREFERENCE_UNSATISFIED")
-            # A visit can serve several members' goals. Reserve options for the
-            # largest target in each period; the optimizer evaluates each actual bound.
-            soft_rules = [rule for rule in market_rules if not rule.get("required")]
-            if soft_rules:
-                daily_goal = max((r["count"] for r in soft_rules if r.get("scope") == "day"), default=0)
-                trip_goal = max((r["count"] for r in soft_rules if r.get("scope") == "trip"), default=0)
-                flexible_markets = (market_match_ids & eligible_by_id.keys()) - anchor_ids
-                hard_daily_ids = set().union(*required_by_date.values())
-                options_by_date, remaining_by_date = {}, {}
-                for day in day_strings:
-                    fixed = fixed_by_date.get(day, set())
-                    occupied = fixed | required_by_date[day]
-                    remaining_by_date[day] = max(0, min(daily_goal - len(occupied & market_match_ids),
-                                                        8 - len(occupied)))
-                    options_by_date[day] = {cid for cid in flexible_markets - hard_daily_ids
-                                            if day in eligible_by_id[cid]["allowedDates"]}
-                slots = [day for index in range(max(remaining_by_date.values(), default=0))
-                         for day in day_strings if index < remaining_by_date[day]]
-                soft_market_ids.update(assign_slots(slots[:maxc], options_by_date).values())
-                fixed_visits_to_markets = sum(v["contentid"] in market_match_ids for v in fixed_visits)
-                represented = (required_ids & market_match_ids) | soft_market_ids
-                remaining = max(0, trip_goal - fixed_visits_to_markets - len(represented))
-                soft_market_ids.update(sorted(flexible_markets - represented, key=candidate_key)[:remaining])
+            # Reserve bounded witnesses for distinct soft goals. Repeated
+            # member references to the same grounded identity do not amplify
+            # its quota, and overlapping goals can share selected candidates.
+            supported_dims = {"market", "catalog_food", "catalog_activity", "catalog_atmosphere"}
+            soft_rules = [rule for rule in route_count_rules if isinstance(rule, dict)
+                          and rule.get("dimension") in supported_dims
+                          and rule.get("polarity", "prefer") == "prefer"
+                          and rule.get("operator") in {"min", "exact", "target"}
+                          and rule.get("required") is not True
+                          and type(rule.get("count")) is int and rule["count"] > 0]
+            unique_soft = {}
+            soft_match_by_key = {}
+            for rule in soft_rules:
+                resolved = draft_preference_rules({**route_preferences, "countRules": [rule]}, catalog, candidate_ids)
+                if not resolved:
+                    continue
+                matches = set(resolved[0]["contentids"]) & eligible_by_id.keys()
+                identity = (rule.get("dimension"), rule.get("sourceDimension"), tuple(sorted(matches)),
+                            rule.get("scope"), rule.get("operator"), rule.get("count"))
+                unique_soft.setdefault(identity, rule)
+                soft_match_by_key[identity] = matches
+
+            soft_specs = []
+            for identity, rule in unique_soft.items():
+                matches = soft_match_by_key[identity]
+                if rule.get("scope") == "day":
+                    slots = []
+                    options_by_date = {}
+                    for day in day_strings:
+                        occupied = fixed_by_date.get(day, set()) | required_by_date[day]
+                        already = sum(cid in matches for cid in occupied)
+                        remaining = min(max(0, rule["count"] - already), max(0, 8 - len(occupied)))
+                        slots.extend([day] * remaining)
+                        options_by_date[day] = {cid for cid in matches - anchor_ids - required_ids
+                                                if day in eligible_by_id[cid]["allowedDates"]}
+                    soft_specs.append({"period": "day", "slots": slots,
+                                       "optionsByDate": options_by_date, "options": matches})
+                else:
+                    fixed_count = sum(v["contentid"] in matches for v in fixed_visits)
+                    hard_count = len(required_ids & matches)
+                    remaining = max(0, rule["count"] - fixed_count - hard_count)
+                    options = {cid for cid in matches - anchor_ids - required_ids
+                               if eligible_by_id[cid]["allowedDates"]}
+                    soft_specs.append({"period": "trip", "slots": [], "options": options,
+                                       "needed": remaining})
+            soft_coverage = {cid: sum(cid in spec["options"] for spec in soft_specs)
+                             for cid in candidate_ids}
+            soft_key = lambda cid: (-int(cid in soft_goal_ids), -soft_coverage.get(cid, 0), *candidate_key(cid))
+            for spec in soft_specs:
+                if spec["period"] == "trip":
+                    soft_goal_ids.update(sorted(spec["options"], key=soft_key)[:min(spec["needed"], maxc)])
+                else:
+                    slots = list(spec["slots"])
+                    slots.sort(key=lambda day: (len(spec["optionsByDate"][day]), day))
+                    assignment = assign_slots(slots[:maxc], spec["optionsByDate"], soft_key)
+                    soft_goal_ids.update(assignment.values())
         # Keep meal candidates available to the planner even when their group
         # score ranks behind a large sightseeing pool. The public pool remains
         # bounded and all hard filters above still apply.
@@ -707,22 +735,23 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
             del selected[worst["contentid"]]
             selected[meal["contentid"]] = meal
             selected_meals.append(meal)
-        # Reserve market options only after guaranteeing fixed visits, hard
+        # Reserve soft goal options only after guaranteeing fixed visits, hard
         # quota witnesses, and the meal floor. Surplus meals can free a slot.
-        protected_ids.update(soft_market_ids & selected.keys())
+        protected_ids.update(soft_goal_ids & selected.keys())
         meal_count = len(selected_meals)
-        for cid in sorted(soft_market_ids - selected.keys(), key=lambda value: (
+        for cid in sorted(soft_goal_ids - selected.keys(), key=lambda value: (
                 -eligible_by_id[value]["minimumMemberScore"], -eligible_by_id[value]["groupScore"], value)):
+            incoming_is_meal = eligible_by_id[cid]["planningRole"] == "meal_stop"
             replaceable = [row for row in selected.values()
                            if row["contentid"] not in protected_ids
-                           and (row["planningRole"] != "meal_stop" or meal_count > meal_target)]
+                           and (incoming_is_meal or row["planningRole"] != "meal_stop"
+                                or meal_count > meal_target)]
             if not replaceable:
-                break
+                continue
             worst = min(replaceable, key=lambda row: (
                 row["minimumMemberScore"], row["groupScore"], -row["contentid"]))
             del selected[worst["contentid"]]
-            if worst["planningRole"] == "meal_stop":
-                meal_count -= 1
+            meal_count += int(incoming_is_meal) - int(worst["planningRole"] == "meal_stop")
             selected[cid] = eligible_by_id[cid]
             protected_ids.add(cid)
         candidate_public = sorted(selected.values(), key=lambda x: (-x["minimumMemberScore"], -x["groupScore"], x["contentid"]))
@@ -749,6 +778,7 @@ def build_confirmed_candidate_selection(snapshot: Any, catalog: Any, evidence: d
     settings = common_settings or {"reviewedCommonFields": []}
     snapshot_doc = snapshot.as_dict()
     prefs = snapshot_doc["confirmedPreferences"]
+    supported = set(build_supported_tags(catalog))
     common = []
     conditions = snapshot.as_dict()["conditions"]
     for field in ("lodging", "fixedSchedule"):
@@ -762,16 +792,61 @@ def build_confirmed_candidate_selection(snapshot: Any, catalog: Any, evidence: d
                            "fixedVisits": [{k: a[k] for k in ("date", "contentid", "position")}
                                            for a in matched["anchors"] if isinstance(a, dict)
                                            and all(k in a for k in ("date", "contentid", "position"))]})
+    if (not isinstance(evidence, dict) or not isinstance(evidence.get("predicates"), list)
+            or not isinstance(evidence.get("issues"), list)):
+        raise CandidateSelectionError("INVALID_EVIDENCE")
     evidence = {**evidence, "issues": list(evidence.get("issues", []))}
     if isinstance(route_preferences, dict):
-        # Atomic count rules are handled by the scheduler. Only soft tag
-        # predicates contribute to per-place utility; no atomic rule removes a
-        # candidate from the eligible pool.
-        current = {_predicate_identity(item) for item in evidence.get("predicates", []) if isinstance(item, dict)}
+        # Only compiled soft preferences affect per-place utility. Mandatory
+        # visit counts are evaluated across the scheduled itinerary.
+        trusted_typed = {}
+        for item in route_preferences.get("predicates", []):
+            if not isinstance(item, dict) or item.get("contentids") is None:
+                continue
+            ids = item["contentids"]
+            if (isinstance(ids, list) and all(type(cid) is int for cid in ids) and ids == sorted(set(ids))
+                    and item.get("required") is False and item.get("polarity") in ("prefer", "avoid")
+                    and item.get("scope") in ("all", "meal") and isinstance(item.get("memberRef"), str)
+                    and item.get("sourceDimension") in ("food", "activity", "place", "venue", "atmosphere", "vibe", "ambience")
+                    and isinstance(item.get("target"), str)
+                    and (item.get("tag") is None or isinstance(item["tag"], str))):
+                trusted_typed[_predicate_identity(item)] = item
+        validated_evidence = []
+        for item in evidence.get("predicates", []):
+            if not isinstance(item, dict):
+                raise CandidateSelectionError("INVALID_EVIDENCE")
+            if item.get("contentids") is not None:
+                ids = item.get("contentids")
+                if (not isinstance(ids, list) or any(type(cid) is not int for cid in ids)
+                        or not isinstance(item.get("memberRef"), str)
+                        or (item.get("tag") is not None and not isinstance(item.get("tag"), str))
+                        or item.get("polarity") not in ("prefer", "avoid")
+                        or item.get("scope") not in ("all", "meal")
+                        or item.get("required") is not False
+                        or not isinstance(item.get("sourceDimension"), str)):
+                    raise CandidateSelectionError("INVALID_EVIDENCE")
+                identity = _predicate_identity(item)
+                if identity not in trusted_typed:
+                    raise CandidateSelectionError("INVALID_EVIDENCE")
+                continue
+            if (not isinstance(item.get("memberRef"), str) or not isinstance(item.get("tag"), str)
+                    or not isinstance(item.get("polarity"), str) or item.get("polarity") not in {"prefer", "avoid"}
+                    or not isinstance(item.get("scope"), str) or item.get("scope") not in {"all", "meal"}
+                    or type(item.get("required")) is not bool):
+                raise CandidateSelectionError("INVALID_EVIDENCE")
+            validated_evidence.append(dict(item))
+        evidence["predicates"] = validated_evidence
+        current = {_predicate_identity(item) for item in validated_evidence}
         soft_predicates = []
         for item in route_preferences.get("predicates", []):
-            if (not isinstance(item, dict) or item.get("required") is not False
-                    or item.get("polarity") not in {"prefer", "avoid"} or not isinstance(item.get("tag"), str)):
+            if not isinstance(item, dict) or item.get("required") is not False or item.get("polarity") not in {"prefer", "avoid"}:
+                continue
+            if item.get("contentids") is not None:
+                trusted = trusted_typed.get(_predicate_identity(item))
+                if trusted is None or not trusted["contentids"]:
+                    continue
+                item = trusted
+            elif not isinstance(item.get("tag"), str) or item.get("tag") not in supported:
                 continue
             key = _predicate_identity(item)
             if key not in current:
@@ -779,6 +854,11 @@ def build_confirmed_candidate_selection(snapshot: Any, catalog: Any, evidence: d
                 soft_predicates.append(dict(item))
         evidence["predicates"] = list(evidence.get("predicates", [])) + soft_predicates
         evidence["issues"] = list(evidence.get("issues", [])) + list(route_preferences.get("issues", []))
+    elif any(isinstance(item, dict) and item.get("contentids") is not None
+             for item in evidence.get("predicates", [])):
+        # Typed ID predicates are trusted only when they match the compiled
+        # route-preference document supplied by this caller.
+        raise CandidateSelectionError("INVALID_EVIDENCE")
     try:
         anchors = group_schedule_anchors(prefs, settings, snapshot_doc.get("_identity"))
     except ValueError:

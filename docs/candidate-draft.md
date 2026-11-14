@@ -8,6 +8,8 @@
 
 실제 `preferenceTags`·`vibeTags`의 `|` 토큰을 정확히 비교합니다. confidence의 high/medium/low는 출처 정보이며 안전성·부재·완전성을 보장하지 않습니다. 여섯 0..5 점수도 명시적 의미·가중치 없이 안전 조건으로 쓰지 않습니다. 첫 점수 정책은 검토된 태그 일치입니다.
 
+생성 정책 v8에서는 앙상블로 확정한 음식·활동·분위기에 맞춰 메뉴, 이름, 태그와 장소 상세 정보도 검색합니다. 후보를 최대 200곳으로 줄일 때 예약과 필수 조건을 먼저 확보하고, 남은 자리에 서로 다른 선호를 충족하는 장소를 남깁니다. 한 장소가 여러 선호에 맞으면 같은 ID를 활용합니다. [취향 분석과 경로 생성](preference-ensemble.md)
+
 ## 검토 결정과 필수 조건
 
 `app/candidate_selection.py`의 `build_candidate_selection(snapshot, normalization_result, catalog, review, policy)`는 다음을 처리합니다.
