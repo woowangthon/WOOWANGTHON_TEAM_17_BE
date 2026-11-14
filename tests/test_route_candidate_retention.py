@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 
 from app.candidate_selection import build_confirmed_candidate_selection
 
@@ -319,3 +320,116 @@ def test_market_can_use_spare_capacity_above_the_meal_floor():
     rows = _select(catalog, rules=rules, max_candidates=7)["eligible"]
     assert sum(row["planningRole"] == "meal_stop" for row in rows) == 6
     assert any(row["contentid"] == 8 for row in rows)
+
+
+def test_typed_catalog_soft_goals_keep_distinct_low_ranked_ids():
+    catalog = Catalog()
+    typed_rules = [
+        {"memberRef": "p1", "dimension": "catalog_food", "sourceDimension": "food",
+         "target": "국수", "contentids": [210], "tag": None, "scope": "trip",
+         "operator": "min", "count": 1, "required": False, "polarity": "prefer"},
+        {"memberRef": "p2", "dimension": "catalog_activity", "sourceDimension": "activity",
+         "target": "체험", "contentids": [209], "tag": None, "scope": "trip",
+         "operator": "min", "count": 1, "required": False, "polarity": "prefer"},
+        {"memberRef": "p1", "dimension": "catalog_atmosphere", "sourceDimension": "atmosphere",
+         "target": "조용한", "contentids": [208], "tag": None, "scope": "trip",
+         "operator": "min", "count": 1, "required": False, "polarity": "prefer"},
+    ]
+    catalog.places[209].update(planningRole="meal_stop", recommendationUse="MEAL")
+
+    selection = _select(catalog, rules={"predicates": [], "countRules": typed_rules}, max_candidates=5)
+    selected = {row["contentid"] for row in selection["eligible"]}
+    assert {208, 209, 210}.issubset(selected)
+    assert len(selected) == 5
+    serialized = json.dumps(selection, ensure_ascii=False)
+    assert all(rule["target"] not in serialized for rule in typed_rules)
+    assert all("contentids" not in row for row in selection["eligible"])
+
+
+def test_typed_food_goal_can_replace_lower_ranked_meal_at_meal_floor():
+    catalog = Catalog()
+    catalog.places[0].update(planningRole="meal_stop", recommendationUse="MEAL")
+    catalog.places[209].update(planningRole="meal_stop", recommendationUse="MEAL")
+    rule = {"memberRef": "p1", "dimension": "catalog_food", "sourceDimension": "food",
+            "target": "국수", "contentids": [210], "tag": None, "scope": "trip",
+            "operator": "min", "count": 1, "required": False, "polarity": "prefer"}
+
+    selection = _select(catalog, rules={"predicates": [], "countRules": [rule]}, max_candidates=1)
+    assert [row["contentid"] for row in selection["eligible"]] == [210]
+
+
+def test_mixed_trip_retains_nearby_meals_visits_and_a_requested_dish():
+    catalog = Catalog(count=45)
+    for row in catalog.places:
+        cid = row["contentid"]
+        row["mapx"] = 127.9 if cid < 25 else 127.0 + cid / 100_000
+        if cid % 2:
+            row.update(planningRole="meal_stop", recommendationUse="MEAL")
+    snapshot = _snapshot()
+    snapshot.conditions["departureContentid"] = 40
+    rule = {"scope": "day", "operator": "target", "count": 3, "required": False, "polarity": "prefer"}
+    compiled = {"countRules": [{**rule, "dimension": "sightseeing"}, {**rule, "dimension": "meals"},
+                              {**rule, "dimension": "catalog_food", "scope": "trip", "operator": "min",
+                               "count": 1, "contentids": [1, 45]}]}
+    rows = _select(catalog, rules=compiled, max_candidates=12, snapshot=snapshot)["eligible"]
+    assert len(rows) == 12
+    assert all(row["contentid"] >= 25 for row in rows)
+    assert any(row["contentid"] == 45 for row in rows)
+    assert sum(row["planningRole"] == "meal_stop" for row in rows) == 6
+
+
+def test_typed_daily_goal_retains_distinct_ids_for_each_allowed_date():
+    catalog = Catalog()
+    catalog.places[209].update(planningRole="date_specific_event", recommendationUse="EVENT")
+    catalog.details[209].update(planningStatusV2="trip_date_check_required",
+                                eventStartDate="20261212", eventEndDate="20261212")
+    rule = {"memberRef": "p1", "dimension": "catalog_activity", "sourceDimension": "activity",
+            "target": "체험", "contentids": [209, 210], "tag": None, "scope": "day",
+            "operator": "min", "count": 1, "required": False, "polarity": "prefer"}
+    selection = _select(catalog, rules={"predicates": [], "countRules": [rule]}, max_candidates=2)
+    rows = {row["contentid"]: row for row in selection["eligible"]}
+    assert set(rows) == {209, 210}
+    assert rows[210]["allowedDates"] == ["2026-12-12"]
+
+
+def test_unavailable_activity_witness_does_not_block_a_compatible_meal():
+    catalog = Catalog()
+    for cid in (1, 2, 210):
+        catalog.places[cid - 1].update(planningRole="meal_stop", recommendationUse="MEAL")
+    base = {"polarity": "prefer", "scope": "trip", "operator": "min", "count": 1, "required": False}
+    goals = [{**base, "dimension": "catalog_activity", "contentids": [209]},
+             {**base, "dimension": "catalog_food", "contentids": [210]}]
+    rows = _select(catalog, rules={"countRules": goals}, max_candidates=2)["eligible"]
+    assert {row["contentid"] for row in rows} == {1, 210}
+
+
+def test_overlapping_daily_goals_share_a_witness_under_the_cap():
+    snapshot = _snapshot()
+    snapshot.conditions["endDate"] = snapshot.conditions["startDate"]
+    base = {"dimension": "catalog_activity", "polarity": "prefer", "scope": "day",
+            "operator": "min", "count": 1, "required": False}
+    goals = [{**base, "contentids": ids} for ids in ([1, 3], [2, 3])]
+    rows = _select(Catalog(count=3), snapshot=snapshot, rules={"countRules": goals},
+                   max_candidates=1)["eligible"]
+    assert [row["contentid"] for row in rows] == [3]
+
+
+def test_unmatched_soft_preferences_do_not_block_other_open_vocabulary_conditions():
+    from app.candidate_selection import build_supported_tags
+    from app.route_preferences import combine_confirmed_evidence, compile_route_preferences
+
+    snapshot = _snapshot()
+    catalog = Catalog(count=3)
+    for place, title in zip(catalog.places, ["도자기 체험", "숲길", "전시장"]):
+        place["title"] = title
+    base = {"dimension": "activity", "priority": "preferred", "scope": "trip",
+            "memberReferences": ["p1"], "supportType": "soft"}
+    atoms = [{**base, "polarity": polarity, "target": target} for polarity, target in (
+        ("avoid", "서핑"), ("prefer", "승마"), ("prefer", "도자기 체험"), ("prefer", "숲길"))]
+    compiled = compile_route_preferences({**snapshot.as_dict(), "atomicMemberRefs": ["p1"],
+                                          "groupConditions": {"softSupport": atoms}}, catalog)
+    evidence = combine_confirmed_evidence(snapshot.confirmedPreferences, build_supported_tags(catalog), compiled)
+    selection = _select(catalog, snapshot=snapshot, rules=compiled, evidence=evidence)
+    assert selection["readyForDraft"]
+    scores = {row["contentid"]: row["memberScores"]["p1"] for row in selection["eligible"]}
+    assert scores == {1: 0.5, 2: 0.5, 3: 0}

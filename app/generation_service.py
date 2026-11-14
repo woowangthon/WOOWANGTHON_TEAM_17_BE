@@ -146,7 +146,7 @@ class GenerationService:
                  "members": personal, "settingsVersion": settings_version, "catalogDigest": catalog_digest}
         return hashlib.sha256(_canonical(stamp).encode()).hexdigest(), statuses, personal
 
-    def _confirmed_issues(self, conn, trip_id, catalog, common_settings=None):
+    def _confirmed_issues(self, conn, trip_id, catalog, common_settings=None, route_preferences=None):
         from .candidate_selection import build_supported_tags
         conditions, conditions_version = preparation._conditions(conn, trip_id)
         members = conn.execute(text("SELECT id,role FROM trip_members WHERE trip_id=:t AND status='ACTIVE' ORDER BY created_at,id FOR UPDATE"), {"t": trip_id}).mappings().all()
@@ -186,9 +186,10 @@ class GenerationService:
                     confirmed_preferences.group_schedule_anchors([pref], common_settings, {"members": [{"memberId": member["id"], "role": "OWNER"}]})
                 except ValueError:
                     issues.add("SCHEDULE_ITEM_CLARIFICATION_REQUIRED")
-        route_preferences = compile_route_preferences({"conditions": conditions,
-            "atomicMemberRefs": [member["memberRef"] for member in atomic_members],
-            "groupConditions": build_group_preferences(atomic_members)}, catalog)
+        if route_preferences is None:
+            route_preferences = compile_route_preferences({"conditions": conditions,
+                "atomicMemberRefs": [member["memberRef"] for member in atomic_members],
+                "groupConditions": build_group_preferences(atomic_members)}, catalog)
         issues.update(item["code"] for item in combine_confirmed_evidence(confirmed_group, tags, route_preferences)["issues"]
                       if item["code"].startswith("REQUIRED_"))
         return sorted(issues)
@@ -742,9 +743,9 @@ class GenerationService:
                 raise ServiceError("STALE_GENERATION_INPUT")
             doc = snapshot.as_dict()
             remapped_prefs = doc["confirmedPreferences"]
-            issues = self._confirmed_issues(conn, trip_id, catalog, gen_settings)
-            if issues: raise ServiceError(issues[0])
             route_preferences = compile_route_preferences(doc, catalog)
+            issues = self._confirmed_issues(conn, trip_id, catalog, gen_settings, route_preferences)
+            if issues: raise ServiceError(issues[0])
             confirmed = combine_confirmed_evidence(remapped_prefs, build_supported_tags(catalog), route_preferences)
             gen_settings = {**gen_settings, "confirmedScheduleAnchors": confirmed_preferences.group_schedule_anchors(
                 remapped_prefs, gen_settings, doc.get("_identity")), "_routePreferences": route_preferences}

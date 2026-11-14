@@ -5,7 +5,7 @@ import math
 from typing import Any, Mapping
 
 
-GENERATION_POLICY_VERSION = "atomic-route-market-v7"
+GENERATION_POLICY_VERSION = "atomic-route-mixed-visits-v9"
 CAR_LEG_MAX_SECONDS = 40 * 60
 
 

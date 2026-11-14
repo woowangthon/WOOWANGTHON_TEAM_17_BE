@@ -344,6 +344,38 @@ def test_candidate_pool_role_anchors_protect_meals_appointments_and_lodging():
     assert 6 not in ids
 
 
+def test_typed_requested_swaps_preserve_roles_dates_and_anchors():
+    from app.itinerary_optimizer import _requested_visit_swaps
+
+    tomorrow = "2026-12-13"
+    current = {"days": [{"date": DAY, "places": [
+        {"contentid": 2}, {"contentid": 3}, {"contentid": 4},
+    ]}]}
+    pool = {
+        2: {"contentid": 2, "planningRole": "meal_stop", "allowedDates": [DAY]},
+        3: {"contentid": 3, "planningRole": "sightseeing_stop", "allowedDates": [DAY]},
+        4: {"contentid": 4, "planningRole": "sightseeing_stop", "allowedDates": [DAY]},
+        10: {"contentid": 10, "planningRole": "meal_stop", "allowedDates": [DAY]},
+        11: {"contentid": 11, "planningRole": "activity_stop", "allowedDates": [DAY]},
+        12: {"contentid": 12, "planningRole": "sightseeing_stop", "allowedDates": [tomorrow]},
+    }
+    goals = [
+        {"contentids": [10], "period": "trip", "operator": "min", "count": 1, "required": True},
+        {"contentids": [11, 12], "period": "trip", "operator": "target", "count": 1, "required": False},
+    ]
+    moves = list(_requested_visit_swaps(current, pool, {(DAY, 4): 2}, goals))
+    replacements = {(neighbor["days"][0]["places"][position]["contentid"], phase)
+                    for phase, neighbor in moves
+                    for position in range(len(neighbor["days"][0]["places"]))
+                    if neighbor["days"][0]["places"][position]["contentid"] not in {2, 3, 4}}
+    assert (10, "requested_visit") in replacements
+    assert (11, "requested_visit") in replacements
+    assert all(cid != 12 for cid, _phase in replacements)
+    assert all(neighbor["days"][0]["places"][0]["contentid"] in {2, 10} for _phase, neighbor in moves)
+    assert all(neighbor["days"][0]["places"][2]["contentid"] == 4
+               for _phase, neighbor in moves)
+
+
 def test_two_day_reallocation_keeps_hotel_last_and_preserves_checkout_anchor():
     from app.day_schedule import build_scheduled_plan
 
