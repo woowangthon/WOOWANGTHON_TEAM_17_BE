@@ -117,7 +117,7 @@ def _route_facts(router, origin, destination, mode):
         return unknown_route(mode, "ROUTE_RESPONSE_INVALID")
 
 
-def validate_generated_plan(draft, catalog, conditions, preferences, settings, router=None, timeout_seconds=90, *, planned_slots=None):
+def validate_generated_plan(draft, catalog, conditions, preferences, settings, router=None, timeout_seconds=90, *, planned_slots=None, route_preferences=None):
     """Validate a detached candidate draft; unresolved facts stay null, not invented."""
     if hasattr(draft, "as_dict"):
         draft = draft.as_dict()
@@ -345,4 +345,9 @@ def validate_generated_plan(draft, catalog, conditions, preferences, settings, r
     validation = {"status": status, **domains, "violations": violations,
                   "warnings": sorted(set(warnings + [code for codes in reasons.values() for code in codes])),
                   "knownCostKrw": known_cost, "totalCostKrw": None}
-    return {"schemaVersion": 1, "days": days, "validation": validation, "createdAt": _iso(datetime.now(UTC))}
+    result = {"schemaVersion": 1, "days": days, "validation": validation, "createdAt": _iso(datetime.now(UTC))}
+    compiled = route_preferences if route_preferences is not None else settings.get("_routePreferences")
+    if isinstance(compiled, dict):
+        from .route_preferences import apply_route_preferences
+        result = apply_route_preferences(result, compiled, catalog)
+    return result

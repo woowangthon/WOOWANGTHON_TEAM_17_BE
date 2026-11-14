@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from typing import Any
 
 
@@ -83,6 +84,45 @@ def response_profile_status(profile: Any, original_text: str | None, conditions:
     if profile.get("status") != "current" or profile.get("sourceDigest") != source_digest(original_text, conditions):
         result = mark_stale(result)
     return result
+
+
+def validate_unresolved_acknowledgements(value: Any, profile: Any, original_text: str | None,
+                                         conditions: dict[str, Any]) -> dict[str, Any]:
+    """Validate private review metadata against unresolved notes from a trusted current profile."""
+    if (not isinstance(value, dict) or set(value) != {"sourceDigest", "items"}
+            or not isinstance(value.get("sourceDigest"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", value["sourceDigest"])
+            or not isinstance(value.get("items"), list) or len(value["items"]) > 80):
+        raise ValueError("Invalid unresolved acknowledgements")
+    expected_digest = digest(original_text, conditions)
+    if value["sourceDigest"] != expected_digest:
+        raise ValueError("Acknowledgement source changed")
+    trusted = response_profile_status(profile, original_text, conditions)
+    allowed = set()
+    if value["items"]:
+        if (not isinstance(trusted, dict) or trusted.get("status") != "current"
+                or trusted.get("sourceDigest") != expected_digest):
+            raise ValueError("No current unresolved notes")
+        for note in trusted.get("unresolved", []):
+            if isinstance(note, dict) and set(note) == {"code", "evidence", "message"}:
+                allowed.add(tuple(note[key] for key in ("code", "evidence", "message")))
+    items, seen = [], set()
+    for item in value["items"]:
+        if (not isinstance(item, dict) or set(item) != {"note", "disposition"}
+                or not isinstance(item.get("disposition"), str)
+                or item["disposition"] not in {"handled", "ignored"}):
+            raise ValueError("Invalid unresolved acknowledgement item")
+        note = item["note"]
+        if (not isinstance(note, dict) or set(note) != {"code", "evidence", "message"}
+                or not all(isinstance(note.get(key), str) for key in ("code", "evidence", "message"))):
+            raise ValueError("Invalid unresolved acknowledgement note")
+        triple = tuple(note[key] for key in ("code", "evidence", "message"))
+        if triple not in allowed or triple in seen:
+            raise ValueError("Unknown or duplicate unresolved acknowledgement")
+        seen.add(triple)
+        items.append({"note": {key: note[key] for key in ("code", "evidence", "message")},
+                      "disposition": item["disposition"]})
+    return {"sourceDigest": expected_digest, "items": items}
 
 
 def apply_client_profile_edits(incoming: Any, existing: Any, original_text: str | None,

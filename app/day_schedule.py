@@ -257,7 +257,8 @@ def build_scheduled_plan(draft, catalog, conditions, preferences, settings, rout
                 repaired, repaired_plan, repaired_settings, report = repair_itinerary(
                     normalized_source, settings, candidates, strict_evaluate, reference_plan=reference_plan,
                     semantic_context=semantic_context if use_semantics else None,
-                    max_visits_per_day=8, max_evaluations=24, search_budget=search_budget)
+                    max_visits_per_day=8, max_evaluations=24, search_budget=search_budget,
+                    route_preferences=settings.get("_routePreferences"), catalog=catalog)
                 report["strictBaselineChecks"] = 1
                 report["searchEvaluationsUsed"] = search_budget.used_trials
                 report["searchEvaluationsRemaining"] = search_budget.remaining
@@ -274,7 +275,7 @@ def build_scheduled_plan(draft, catalog, conditions, preferences, settings, rout
                             max_visits_per_day=8, max_evaluations=24,
                             time_budget_seconds=min(1.0, max(0.0, deadline - time.monotonic())),
                             semantic_context=semantic_context if use_semantics else None,
-                            search_budget=search_budget)
+                            search_budget=search_budget, route_preferences=settings.get("_routePreferences"), catalog=catalog)
                         if local_report.get("acceptedMoves", 0) > 0:
                             repaired, repaired_plan, repaired_settings = optimized, optimized_plan, optimized_settings
                     except Exception:
@@ -406,7 +407,8 @@ def build_scheduled_plan(draft, catalog, conditions, preferences, settings, rout
             optimized, optimized_plan, optimized_settings, metrics = optimize_itinerary(
                 result, adjusted, candidates, evaluate, max_visits_per_day=8,
                 max_evaluations=24, time_budget_seconds=min(1.0, max(0.01, deadline - time.monotonic())),
-                semantic_context=semantic_context if use_semantics else None, search_budget=search_budget)
+                semantic_context=semantic_context if use_semantics else None, search_budget=search_budget,
+                route_preferences=settings.get("_routePreferences"), catalog=catalog)
             metrics["searchEvaluationsUsed"] = search_budget.used_trials
             metrics["searchEvaluationsRemaining"] = search_budget.remaining
             if metrics.get("acceptedMoves", 0) > 0:

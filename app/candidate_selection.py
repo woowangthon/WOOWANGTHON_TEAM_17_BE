@@ -51,6 +51,11 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8", "strict")).hexdigest()
 
 
+def _predicate_identity(item: dict[str, Any]) -> tuple[Any, ...]:
+    return (item.get("memberRef"), item.get("tag"), item.get("polarity"),
+            item.get("scope"), item.get("required"))
+
+
 def normalization_digest(result: Any) -> str:
     """Hash a strict JSON normalization document using canonical UTF-8 JSON."""
     return _digest(result)
@@ -264,7 +269,8 @@ def _role(r: Mapping[str, Any]) -> bool:
 
 def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog: Any,
                               review: dict[str, Any] | None = None, policy: dict[str, Any] | None = None,
-                              *, confirmed_evidence: dict[str, Any] | None = None) -> CandidateSelection:
+                              *, confirmed_evidence: dict[str, Any] | None = None,
+                              route_preferences: dict[str, Any] | None = None) -> CandidateSelection:
     """Build a deterministic selection; only explicit reviewed evidence can pass required filters."""
     try:
         doc = snapshot.as_dict()
@@ -521,6 +527,122 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
                         del selected[worst["contentid"]]
                 if len(selected) < maxc:
                     selected[cid] = eligible_by_id[cid]
+        protected_ids = set(anchor_ids)
+        if isinstance(route_preferences, dict):
+            from .route_preferences import draft_preference_rules
+            candidate_ids = list(eligible_by_id)
+            required_ids: set[int] = set()
+            fixed_by_date: dict[str, set[int]] = {}
+            for visit in fixed_visits:
+                fixed_by_date.setdefault(visit["date"], set()).add(visit["contentid"])
+            specs = []
+            for rule in route_preferences.get("countRules", []):
+                if (not isinstance(rule, dict) or rule.get("required") is not True
+                        or rule.get("operator") not in {"min", "exact"}):
+                    continue
+                needed = rule.get("count")
+                if type(needed) is not int or needed < 0:
+                    unresolved.append("REQUIRED_PREFERENCE_UNSUPPORTED")
+                    continue
+                resolved = draft_preference_rules({**route_preferences, "countRules": [rule]}, catalog, candidate_ids)
+                matching_ids = set(resolved[0]["contentids"]) if resolved else set()
+                if rule.get("scope") == "day":
+                    if needed > 8:
+                        unresolved.append("REQUIRED_PREFERENCE_UNSATISFIED")
+                        continue
+                    options_by_date = {}
+                    fixed_matches_by_date = {}
+                    slots = []
+                    for day in day_strings:
+                        date_matches = {cid for cid in matching_ids if cid in eligible_by_id
+                                        and day in eligible_by_id[cid]["allowedDates"]}
+                        fixed_matches = date_matches & fixed_by_date.get(day, set())
+                        fixed_matches_by_date[day] = fixed_matches
+                        remaining = max(0, needed - len(fixed_matches))
+                        # A fixed place can satisfy its own date, but its ID is
+                        # never borrowed as a flexible visit on another date.
+                        options = date_matches - anchor_ids
+                        options_by_date[day] = options
+                        slots.extend([day] * remaining)
+                    if any(len(options_by_date[day]) + len(fixed_matches_by_date[day]) < needed
+                           for day in day_strings):
+                        unresolved.append("REQUIRED_PREFERENCE_UNSATISFIED")
+                    if len(slots) > maxc:
+                        unresolved.append("REQUIRED_PREFERENCE_UNSATISFIED")
+                        continue
+                    specs.append({"period": "day", "optionsByDate": options_by_date,
+                                  "slots": slots, "needed": needed})
+                else:
+                    fixed_match_count = sum(1 for visit in fixed_visits if visit["contentid"] in matching_ids)
+                    remaining = max(0, needed - fixed_match_count)
+                    eligible_matches = {cid for cid in matching_ids if cid in eligible_by_id
+                                        and eligible_by_id[cid]["allowedDates"]} - anchor_ids
+                    if len(eligible_matches) < remaining or remaining > maxc:
+                        unresolved.append("REQUIRED_PREFERENCE_UNSATISFIED")
+                    specs.append({"period": "trip", "options": eligible_matches,
+                                  "needed": remaining})
+
+            # Prefer candidates that satisfy overlapping required rules so a
+            # single eligible place can support several conditions.
+            coverage = {cid: sum(1 for spec in specs if spec["needed"] > 0 and (
+                cid in spec.get("options", set()) if spec["period"] == "trip"
+                else any(cid in spec["optionsByDate"].get(day, set()) for day in spec["slots"])))
+                        for cid in candidate_ids if cid not in anchor_ids}
+
+            def candidate_key(cid):
+                row = eligible_by_id[cid]
+                return (-int(cid in required_ids), -coverage.get(cid, 0),
+                        -row["minimumMemberScore"], -row["groupScore"], cid)
+
+            for spec in specs:
+                if spec["period"] == "trip":
+                    chosen = sorted(spec["options"], key=candidate_key)[:spec["needed"]]
+                    required_ids.update(chosen)
+                    continue
+
+                slots = list(spec["slots"])
+                slots.sort(key=lambda day: (len(spec["optionsByDate"][day]), day))
+                assignment: dict[int, int] = {}
+                assigned_slot_by_id: dict[int, int] = {}
+
+                def assign(slot_index: int, seen: set[int]) -> bool:
+                    day = slots[slot_index]
+                    for cid in sorted(spec["optionsByDate"][day], key=candidate_key):
+                        if cid in seen:
+                            continue
+                        seen.add(cid)
+                        previous = assigned_slot_by_id.get(cid)
+                        if previous is None or assign(previous, seen):
+                            assignment[slot_index] = cid
+                            assigned_slot_by_id[cid] = slot_index
+                            return True
+                    return False
+
+                matched = 0
+                for slot_index in range(len(slots)):
+                    if assign(slot_index, set()):
+                        matched += 1
+                if matched < len(slots):
+                    unresolved.append("REQUIRED_PREFERENCE_UNSATISFIED")
+                required_ids.update(assignment.values())
+            if len(protected_ids | required_ids) > maxc:
+                unresolved.append("REQUIRED_PREFERENCE_UNSATISFIED")
+            protected_ids.update(required_ids)
+            for cid in sorted(required_ids, key=lambda value: (
+                    -eligible_by_id[value]["minimumMemberScore"],
+                    -eligible_by_id[value]["groupScore"], value)):
+                if cid in selected:
+                    continue
+                if len(selected) >= maxc:
+                    replaceable = [x for x in selected.values() if x["contentid"] not in protected_ids]
+                    if replaceable:
+                        worst = max(replaceable, key=lambda x: (
+                            -x["minimumMemberScore"], -x["groupScore"], x["contentid"]))
+                        del selected[worst["contentid"]]
+                if len(selected) < maxc:
+                    selected[cid] = eligible_by_id[cid]
+                else:
+                    unresolved.append("REQUIRED_PREFERENCE_UNSATISFIED")
         # Keep meal candidates available to the planner even when their group
         # score ranks behind a large sightseeing pool. The public pool remains
         # bounded and all hard filters above still apply.
@@ -534,7 +656,7 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
             if meal["contentid"] in selected:
                 continue
             replaceable = [x for x in selected.values()
-                           if x["contentid"] not in anchor_ids and x["planningRole"] != "meal_stop"]
+                           if x["contentid"] not in protected_ids and x["planningRole"] != "meal_stop"]
             if not replaceable:
                 break
             worst = min(replaceable, key=lambda x: (x["minimumMemberScore"], x["groupScore"], -x["contentid"]))
@@ -558,7 +680,8 @@ def build_candidate_selection(snapshot: Any, normalization_result: Any, catalog:
 
 def build_confirmed_candidate_selection(snapshot: Any, catalog: Any, evidence: dict[str, Any],
                                        common_settings: dict[str, Any] | None = None,
-                                       policy: dict[str, Any] | None = None) -> CandidateSelection:
+                                       policy: dict[str, Any] | None = None, *,
+                                       route_preferences: dict[str, Any] | None = None) -> CandidateSelection:
     """Select using deterministic confirmed-v1 predicates without review DTOs."""
     from .confirmed_preferences import group_schedule_anchors
     settings = common_settings or {"reviewedCommonFields": []}
@@ -578,6 +701,22 @@ def build_confirmed_candidate_selection(snapshot: Any, catalog: Any, evidence: d
                                            for a in matched["anchors"] if isinstance(a, dict)
                                            and all(k in a for k in ("date", "contentid", "position"))]})
     evidence = {**evidence, "issues": list(evidence.get("issues", []))}
+    if isinstance(route_preferences, dict):
+        # Atomic count rules are handled by the scheduler. Only soft tag
+        # predicates contribute to per-place utility; no atomic rule removes a
+        # candidate from the eligible pool.
+        current = {_predicate_identity(item) for item in evidence.get("predicates", []) if isinstance(item, dict)}
+        soft_predicates = []
+        for item in route_preferences.get("predicates", []):
+            if (not isinstance(item, dict) or item.get("required") is not False
+                    or item.get("polarity") not in {"prefer", "avoid"} or not isinstance(item.get("tag"), str)):
+                continue
+            key = _predicate_identity(item)
+            if key not in current:
+                current.add(key)
+                soft_predicates.append(dict(item))
+        evidence["predicates"] = list(evidence.get("predicates", [])) + soft_predicates
+        evidence["issues"] = list(evidence.get("issues", [])) + list(route_preferences.get("issues", []))
     try:
         anchors = group_schedule_anchors(prefs, settings, snapshot_doc.get("_identity"))
     except ValueError:
@@ -593,4 +732,5 @@ def build_confirmed_candidate_selection(snapshot: Any, catalog: Any, evidence: d
     evidence["digest"] = _digest({k: evidence[k] for k in ("policyVersion", "predicates", "issues")})
     return build_candidate_selection(snapshot, None, catalog, None, policy,
                                      confirmed_evidence={**evidence, "fixedVisits": fixed,
-                                                         "reviewedCommonFields": common})
+                                                         "reviewedCommonFields": common},
+                                     route_preferences=route_preferences)

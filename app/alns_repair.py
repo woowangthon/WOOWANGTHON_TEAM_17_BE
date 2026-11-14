@@ -373,7 +373,8 @@ def repair_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidate_
                      *, reference_plan: dict[str, Any], semantic_context: Any = None,
                      max_visits_per_day: int = 8, max_evaluations: int = 24,
                      time_budget_seconds: float = 1.0,
-                     deadline: float | None = None, search_budget: SearchBudget | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None,
+                     deadline: float | None = None, search_budget: SearchBudget | None = None,
+                     route_preferences: Any = None, catalog: Any = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None,
                                                             dict[str, Any], dict[str, Any]]:
     """Search bounded multi-stop replacements/date moves and fully validate each.
 
@@ -463,9 +464,11 @@ def repair_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidate_
             try:
                 from .itinerary_optimizer import _rank
                 old_rank = _rank(best_draft, best_plan, pool, anchors, semantic_context,
-                                 activity_window=(best_settings or settings).get("activityWindow"))
+                                 activity_window=(best_settings or settings).get("activityWindow"),
+                                 route_preferences=route_preferences or settings.get("_routePreferences"), catalog=catalog)
                 new_rank = _rank(scheduled, plan, pool, anchors, semantic_context,
-                                 activity_window=adjusted.get("activityWindow") or settings.get("activityWindow"))
+                                 activity_window=adjusted.get("activityWindow") or settings.get("activityWindow"),
+                                 route_preferences=route_preferences or settings.get("_routePreferences"), catalog=catalog)
             except Exception:
                 old_rank = new_rank = (0, 0, float("inf"))
             if new_rank < old_rank:

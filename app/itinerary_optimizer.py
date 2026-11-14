@@ -116,11 +116,17 @@ def _category_repetitions(draft: dict[str, Any], candidates: dict[int, dict[str,
 
 
 def _rank(draft: dict[str, Any], plan: dict[str, Any], candidates: dict[int, dict[str, Any]],
-          anchors: set[tuple[str, int]] | None = None, semantic_context: Any = None, *, activity_window=None):
+          anchors: set[tuple[str, int]] | None = None, semantic_context: Any = None, *, activity_window=None,
+          route_preferences=None, catalog=None):
     travel = _travel_seconds(plan)
     meal_deviation = meal_deviation_minutes(plan, candidates, anchors, activity_window=activity_window)
     # Unknown routes are never assigned a zero cost or treated as an improvement.
-    return (sum(_violations(plan).values()), -_preference_score(draft, candidates, anchors, semantic_context),
+    quota_penalty = 0.0
+    if route_preferences is not None and catalog is not None:
+        from .route_preferences import route_preference_penalty
+        quota_penalty = route_preference_penalty(plan, route_preferences, catalog)
+    return (sum(_violations(plan).values()),
+            -_preference_score(draft, candidates, anchors, semantic_context) + quota_penalty,
             meal_deviation if meal_deviation is not None else float("inf"),
             travel if travel is not None else float("inf"))
 
@@ -139,6 +145,9 @@ def _anchored_positions(settings: dict[str, Any]) -> dict[tuple[str, int], int]:
 
 def _risk_counts(plan: dict[str, Any]) -> Counter:
     risks = Counter()
+    for code in plan["validation"].get("warnings", []):
+        if code == "REQUIRED_PREFERENCE_UNVERIFIED":
+            risks[("atomicPreferences", code)] += 1
     for domain in ("route", "walking", "time", "budget", "openingHours"):
         value = plan["validation"].get(domain, {})
         for code in value.get("reasonCodes", []):
@@ -289,7 +298,7 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
                        evaluate: Callable[[dict[str, Any]], tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
                        *, max_visits_per_day: int = 8, max_evaluations: int = 24,
                        time_budget_seconds: float = 1.0, semantic_context: Any = None,
-                       search_budget: Any = None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+                       search_budget: Any = None, route_preferences: Any = None, catalog: Any = None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Try a small set of local moves and retain only fully checked safe gains.
 
     `evaluate` returns (scheduled draft, public validation plan, adjusted settings).
@@ -297,6 +306,7 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
     deadline. A new hard violation or unknown validation warning rejects a move.
     """
     baseline = copy.deepcopy(draft)
+    route_preferences = route_preferences if route_preferences is not None else settings.get("_routePreferences")
     pool = {row["contentid"]: row for row in candidate_pool
             if isinstance(row, dict) and type(row.get("contentid")) is int}
     ids = {p["contentid"] for day in draft["days"] for p in day["places"]}
@@ -314,7 +324,7 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
     anchor_ids = set(anchors)
     activity_window = current_settings.get("activityWindow") or settings.get("activityWindow")
     current_rank = _rank(current_draft, current_plan, pool, anchor_ids, semantic_context,
-                         activity_window=activity_window)
+                         activity_window=activity_window, route_preferences=route_preferences, catalog=catalog)
     attempted = accepted = 0
     utility_screened = 0
     attempted_by_phase = Counter()
@@ -342,7 +352,8 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
         # the six-route budget on it before reaching useful diversity moves.
         # This check is outside the lazy generator so the wall-clock deadline
         # still applies to every screened candidate.
-        if (not _violations(current_plan)
+        if (not _violations(current_plan) and not (route_preferences and (
+                route_preferences.get("countRules") or route_preferences.get("walkingRules")))
                 and _preference_score(neighbor, pool, anchor_ids, semantic_context)
                 < _preference_score(current_draft, pool, anchor_ids, semantic_context)):
             utility_screened += 1
@@ -367,7 +378,8 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
                 or risks - initial_risks or risks - current_risks):
             continue
         new_rank = _rank(scheduled, plan, pool, anchor_ids, semantic_context,
-                         activity_window=adjusted.get("activityWindow") or activity_window)
+                         activity_window=adjusted.get("activityWindow") or activity_window,
+                         route_preferences=route_preferences, catalog=catalog)
         if new_rank < current_rank:
             current_draft, current_plan, current_settings = scheduled, plan, adjusted
             current_rank = new_rank

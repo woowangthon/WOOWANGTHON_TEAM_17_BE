@@ -89,6 +89,7 @@ def test_generation_readiness_uses_owner_and_never_reads_unconfirmed_drafts(atom
                 "value": None, "unit": None, "approximate": False, "evidence": original}], [], original,
                 CONDITIONS | {"lodging": None, "fixedSchedule": None})
             owner_data = {**owner_data, "originalText": original, "likes": None, "walking": None, "food": "초밥", "atomicPreferences": profile}
+            owner_data["_unresolvedAcknowledgements"] = {"sourceDigest": profile["sourceDigest"], "items": []}
         owner_draft = json.dumps(owner_data, ensure_ascii=False)
         conn.execute(text("INSERT INTO member_preparation_documents VALUES ('trip','owner',:draft,1,1,1,'2026-11-11T00:00:00Z')"), {"draft": owner_draft})
         # Invalid JSON ensures an unchecked document must not be parsed.
@@ -115,6 +116,15 @@ def test_generation_readiness_uses_owner_and_never_reads_unconfirmed_drafts(atom
             {"id": "guest", "nickname": "guest", "status": "writing"},
         ]
         assert adapters[0].draft_reads == ["owner", "owner"]
+        if atomic_food_only:
+            conn = service._conn()
+            try:
+                snapshot, self_draft, *_ = service._self_capture(conn, object(), "trip")
+            finally:
+                conn.close()
+            assert self_draft["food"] == "초밥"
+            assert "_unresolvedAcknowledgements" not in self_draft
+            assert "_unresolvedAcknowledgements" not in json.dumps(snapshot.as_dict(), ensure_ascii=False)
     finally:
         engine.dispose()
 

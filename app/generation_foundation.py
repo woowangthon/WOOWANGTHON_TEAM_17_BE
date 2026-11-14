@@ -63,6 +63,7 @@ def _confirmed_doc(row: Any, conditions_version: int) -> bool:
 
 
 def _clean_preference(raw: Any) -> dict[str, Any]:
+    raw = preparation.stored_draft_without_private_metadata(raw)
     allowed = (frozenset(preparation.PERSONAL_KEYS), frozenset(preparation.PERSONAL_KEYS) | {"scheduleItems"},
                frozenset(preparation.PERSONAL_KEYS) | {"atomicPreferences"},
                frozenset(preparation.PERSONAL_KEYS) | {"scheduleItems", "atomicPreferences"})
@@ -126,7 +127,7 @@ def _capture(conn: Any, trip_id: str, authorize: Callable) -> ConfirmedPreparati
             draft_row = conn.execute(text("SELECT draft_json FROM member_preparation_documents WHERE trip_id=:t AND member_id=:m"), {"t": trip_id, "m": mid}).mappings().first()
             if not draft_row:
                 raise GenerationFoundationError("PREPARATION_NOT_READY")
-            raw_draft = _json_value(draft_row["draft_json"])
+            raw_draft = preparation.stored_draft_without_private_metadata(_json_value(draft_row["draft_json"]))
             pref = _clean_preference(raw_draft)
             profile = raw_draft.get("atomicPreferences") if isinstance(raw_draft, dict) else None
             checked_profile = preference_profile.response_profile_status(profile, raw_draft.get("originalText"), conditions) if profile else None
@@ -145,12 +146,14 @@ def _capture(conn: Any, trip_id: str, authorize: Callable) -> ConfirmedPreparati
                  "actorRole": str(actor["role"]), "conditionsVersion": cv,
                  "conditions": conditions, "members": versions}
         group_conditions = build_group_preferences(atomic_members)
+        atomic_refs = [member["memberRef"] for member in atomic_members]
         public = {"conditions": conditions, "conditionsVersion": cv, "confirmedPreferences": prefs,
-                  "groupConditions": group_conditions}
+                  "groupConditions": group_conditions, "atomicMemberRefs": atomic_refs}
         # Include sanitized preferences as well as versions, so out-of-band edits
         # cannot bypass stale-input detection by leaving version counters intact.
         fingerprint = hashlib.sha256(_canonical({**stamp, "confirmedPreferences": prefs,
-                                                  "groupConditions": group_conditions}).encode("utf-8")).hexdigest()
+                                                  "groupConditions": group_conditions,
+                                                  "atomicMemberRefs": atomic_refs}).encode("utf-8")).hexdigest()
         return ConfirmedPreparationSnapshot(_canonical({**public, "_identity": stamp}), fingerprint)
     except GenerationFoundationError:
         raise

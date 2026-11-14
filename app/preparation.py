@@ -27,6 +27,7 @@ IMPORTANCE = {"required", "preferred"}
 WALKING = {"20", "40", "unlimited"}
 CONTROL = set(range(0x20)) | set(range(0x7f, 0xa0)) | {0x2028, 0x2029}
 INTERPRET_PATH = "/api/v1/trips/{trip_id}/preferences/me/interpret"
+_ACK_STORAGE_KEY = "_unresolvedAcknowledgements"
 
 
 class PrepFailure(Exception):
@@ -189,6 +190,17 @@ def _json(value: Any) -> Any:
     return value
 
 
+def stored_draft_without_private_metadata(value: Any) -> Any:
+    """Copy a trusted stored draft while hiding known server-only fields.
+
+    Use only at readers of database draft_json. Client bodies must continue to
+    pass directly through validate_draft(), whose allowlist remains strict.
+    """
+    if not isinstance(value, dict):
+        return value
+    return {key: copy.deepcopy(item) for key, item in value.items() if key != _ACK_STORAGE_KEY}
+
+
 def _initial_conditions() -> dict[str, Any]:
     return {**{key: None for key in CONDITION_KEYS}, "departureTime": "09:00"}
 
@@ -198,7 +210,9 @@ def _initial_draft() -> dict[str, Any]:
 
 
 def _response(row: Any, conditions_version: int, *, schema_version: int = 1, conditions: dict[str, Any] | None = None) -> dict[str, Any]:
-    draft = copy.deepcopy(_json(row["draft_json"])) if row else _initial_draft()
+    raw_draft = copy.deepcopy(_json(row["draft_json"])) if row else _initial_draft()
+    acknowledgements = raw_draft.pop(_ACK_STORAGE_KEY, None) if isinstance(raw_draft, dict) else None
+    draft = stored_draft_without_private_metadata(raw_draft)
     draft.setdefault("scheduleItems", [])
     if schema_version == 1:
         draft.pop("atomicPreferences", None)
@@ -218,6 +232,12 @@ def _response(row: Any, conditions_version: int, *, schema_version: int = 1, con
     if schema_version == 2:
         response["draft"]["atomicPreferences"] = preference_profile.response_profile_status(
             response["draft"].get("atomicPreferences"), response["draft"].get("originalText"), conditions or {})
+        if acknowledgements is not None:
+            try:
+                response["unresolvedAcknowledgements"] = preference_profile.validate_unresolved_acknowledgements(
+                    acknowledgements, response["draft"].get("atomicPreferences"), response["draft"].get("originalText"), conditions or {})
+            except ValueError:
+                pass
     return response
 
 
@@ -492,9 +512,10 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
         trip_id = _trip_id(trip_id, ApiError)
         origin_check(request)
         schema_version = _preference_schema(request, ApiError)
-        body = await body_json(request, {"expectedConditionsVersion", "expectedPreferenceVersion", "draft", "analysisReceipt"})
+        body = await body_json(request, {"expectedConditionsVersion", "expectedPreferenceVersion", "draft", "analysisReceipt", "unresolvedAcknowledgements"})
         required_body = {"expectedConditionsVersion", "expectedPreferenceVersion", "draft"}
-        if set(body) not in (required_body, required_body | {"analysisReceipt"}):
+        optional_body = {"analysisReceipt", "unresolvedAcknowledgements"}
+        if not required_body.issubset(body) or set(body) - required_body - optional_body or ("unresolvedAcknowledgements" in body and schema_version != 2):
             raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.")
         if schema_version == 1 and "analysisReceipt" in body:
             raise ApiError(400, "VALIDATION_ERROR", "analysisReceipt는 X-Preference-Schema: 2에서만 사용할 수 있습니다.")
@@ -531,7 +552,8 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
             if row:
                 try:
                     raw_current = _json(row["draft_json"])
-                    current_draft = validate_draft({**raw_current, "scheduleItems": raw_current.get("scheduleItems", [])})
+                    visible_current = stored_draft_without_private_metadata(raw_current)
+                    current_draft = validate_draft({**visible_current, "scheduleItems": visible_current.get("scheduleItems", [])})
                 except Exception:
                     current_draft = None
             existing_profile = raw_current.get("atomicPreferences") if isinstance(raw_current, dict) else None
@@ -579,10 +601,28 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
                     draft["atomicPreferences"] = preserved
                 except Exception:
                     draft["atomicPreferences"] = None
-            if current_draft == draft:
+            # Acknowledgements are private review metadata stored beside, never
+            # inside, the canonical five-key atomic profile.
+            stored_ack = raw_current.get(_ACK_STORAGE_KEY) if isinstance(raw_current, dict) else None
+            if schema_version == 2 and "unresolvedAcknowledgements" in body:
+                try:
+                    stored_ack = preference_profile.validate_unresolved_acknowledgements(
+                        body["unresolvedAcknowledgements"], draft.get("atomicPreferences"), draft["originalText"], conditions)
+                except ValueError:
+                    _fail(400, "VALIDATION_ERROR", {"unresolvedAcknowledgements": "현재 원문·profile의 unresolved 항목을 확인해 주세요."})
+            elif stored_ack is not None:
+                try:
+                    stored_ack = preference_profile.validate_unresolved_acknowledgements(
+                        stored_ack, draft.get("atomicPreferences"), draft["originalText"], conditions)
+                except ValueError:
+                    stored_ack = None
+            persisted_draft = copy.deepcopy(draft)
+            if stored_ack is not None:
+                persisted_draft[_ACK_STORAGE_KEY] = stored_ack
+            if current_draft == draft and (not isinstance(raw_current, dict) or raw_current.get(_ACK_STORAGE_KEY) == stored_ack):
                 return _response(row, cv, schema_version=schema_version, conditions=conditions)
             new_pv = pv + 1
-            encoded = json.dumps(draft, ensure_ascii=False, separators=(",", ":"))
+            encoded = json.dumps(persisted_draft, ensure_ascii=False, separators=(",", ":"))
             if row:
                 conn.execute(text("UPDATE member_preparation_documents SET draft_json=:j,preference_version=:v,confirmed_conditions_version=NULL,confirmed_preference_version=NULL,confirmed_at=NULL WHERE trip_id=:t AND member_id=:m"), {"j": encoded, "v": new_pv, "t": trip_id, "m": member["id"]})
             else:
@@ -613,7 +653,7 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
             pv = int(row["preference_version"]) if row else 0
             if ec != cv or ep != pv:
                 _fail(409, "VERSION_CONFLICT", conditions=cv, preference=pv)
-            draft = _json(row["draft_json"]) if row else _initial_draft()
+            draft = stored_draft_without_private_metadata(_json(row["draft_json"])) if row else _initial_draft()
             draft.setdefault("scheduleItems", [])
             if schema_version == 2 and draft.get("atomicPreferences") is not None:
                 draft["atomicPreferences"] = preference_profile.response_profile_status(
@@ -625,7 +665,9 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
                 _fail(400, "VALIDATION_ERROR", group_scope_errors)
             missing = _confirmation_missing(draft, schema_version)
             from .walking_preferences import resolve_walking_preference
-            if resolve_walking_preference(draft)["issue"] and "walking" not in missing:
+            current_atomic = (schema_version == 2 and isinstance(draft.get("atomicPreferences"), dict)
+                              and draft["atomicPreferences"].get("status") == "current")
+            if not current_atomic and resolve_walking_preference(draft)["issue"] and "walking" not in missing:
                 missing.append("walking")
             resolved, clarifications = _schedule_clarifications(conn, draft.get("scheduleItems", []))
             if clarifications:
@@ -702,7 +744,7 @@ def register_preparation_routes(app: FastAPI, engine, settings, *, find_session:
                         if idem:
                             conn.execute(text("DELETE FROM preparation_interpret_requests WHERE session_id=:s AND method='POST' AND path=:p AND idempotency_key=:k"), {"s": session["id"], "p": path, "k": key})
                         conn.execute(text("INSERT INTO preparation_interpret_requests(session_id,method,path,idempotency_key,trip_id,member_id,conditions_version,preference_version,fingerprint,status,lease_token,lease_expires_at,result_json,created_at,expires_at) VALUES(:s,'POST',:p,:k,:t,:m,:cv,:pv,:f,'RUNNING',:token,:lease,NULL,:n,:e)"), {"s": session["id"], "p": path, "k": key, "t": trip_id, "m": member["id"], "cv": cv, "pv": pv, "f": fingerprint, "token": token, "lease": now + timedelta(seconds=75), "n": now, "e": now + timedelta(hours=24)})
-                    draft = _json(row["draft_json"]) if row else _initial_draft()
+                    draft = stored_draft_without_private_metadata(_json(row["draft_json"])) if row else _initial_draft()
                     if not draft["originalText"]:
                         _fail(400, "ORIGINAL_TEXT_REQUIRED", {"originalText": "먼저 원문을 저장해 주세요."})
                     return {"token": token, "session_id": session["id"], "member_id": member["id"], "member_role": member["role"], "conditions_version": cv, "preference_version": pv, "original_text": draft["originalText"], "conditions": conditions, "path": path, "schema_version": schema_version}

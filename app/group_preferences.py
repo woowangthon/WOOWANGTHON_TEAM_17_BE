@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 
 def _key(atom: dict[str, Any]) -> tuple[Any, ...]:
     return (atom.get("dimension"), atom.get("target"), atom.get("polarity"), atom.get("priority"),
             atom.get("priorityBasis"), atom.get("scope"), json.dumps(atom.get("frequency"), sort_keys=True),
-            json.dumps(atom.get("value"), ensure_ascii=False, sort_keys=True), atom.get("unit"), bool(atom.get("approximate")))
+            json.dumps(atom.get("value"), ensure_ascii=False, sort_keys=True), atom.get("unit"), bool(atom.get("approximate")),
+            atom.get("walkingScope"))
 
 
 def build_group_preferences(members: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -42,6 +44,12 @@ def build_group_preferences(members: list[dict[str, Any]]) -> dict[str, list[dic
                 continue
             audience, polarity, priority = atom.get("audience"), atom.get("polarity"), atom.get("priority")
             safe = {k: atom.get(k) for k in ("dimension", "target", "polarity", "priority", "priorityBasis", "scope", "frequency", "value", "unit", "approximate")}
+            # Segment can also mean a named day. Preserve only explicitly
+            # continuous walking semantics, without copying private evidence.
+            if (atom.get("dimension") == "walking" and atom.get("scope") == "segment"
+                    and re.search(r"구간\s*당|한\s*구간|연속|한\s*번에", atom.get("evidence", ""))
+                    and not re.search(r"첫\s*날|둘째|셋째|마지막\s*날|\d+\s*일차|\d+\s*월|\d+\s*일", atom.get("evidence", ""))):
+                safe["walkingScope"] = "explicit_segment"
             semantic = json.dumps(safe, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             if semantic in seen:
                 continue
@@ -51,7 +59,7 @@ def build_group_preferences(members: list[dict[str, Any]]) -> dict[str, list[dic
             if audience in {"personal", "unspecified"} and priority == "required":
                 personal_hard.append({**safe, "memberRef": member_ref, "conditionId": atom.get("id")})
             if audience == "group":
-                key = _key(atom)
+                key = _key(safe)
                 entry = groups.setdefault(key, {**safe, "memberCount": 0, "memberReferences": []})
                 if member_ref not in entry["memberReferences"]:
                     entry["memberReferences"].append(member_ref)
@@ -59,7 +67,7 @@ def build_group_preferences(members: list[dict[str, Any]]) -> dict[str, list[dic
             # Personal preferences and non-required dislikes/limits provide one
             # soft contribution per member; no score becomes a hard filter.
             if audience in {"personal", "group", "unspecified"} and priority != "required":
-                key = _key(atom)
+                key = _key(safe)
                 entry = soft.setdefault(key, {**safe, "supportType": "soft", "memberCount": 0, "memberReferences": []})
                 if member_ref not in entry["memberReferences"]:
                     entry["memberReferences"].append(member_ref)

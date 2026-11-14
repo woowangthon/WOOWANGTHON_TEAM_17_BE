@@ -7,7 +7,7 @@ pytest.importorskip("chungbuk_trip_ai")
 
 from app import preference_profile
 from app.group_preferences import build_group_preferences
-from app.preparation import _confirmation_missing, _response, _validate_interpret_result
+from app.preparation import PrepFailure, _confirmation_missing, _response, _validate_interpret_result, stored_draft_without_private_metadata, validate_draft
 from chungbuk_trip_ai import build_atomic_preferences
 
 
@@ -78,6 +78,36 @@ def test_cached_analysis_receipt_is_bound_to_profile_and_source():
         preference_profile.profile_from_cached_result(result, "foreign", EVIDENCE, CONDITIONS)
     with pytest.raises(ValueError):
         preference_profile.profile_from_cached_result(result, "receipt-123", EVIDENCE + " changed", CONDITIONS)
+
+
+def test_unresolved_acknowledgements_are_exact_source_bound_and_resettable():
+    notes = [{"code": "ambiguous", "evidence": "숲길", "message": "범위를 확인해 주세요."}]
+    profile = build_atomic_preferences([atom()], notes, EVIDENCE, CONDITIONS)
+    value = {"sourceDigest": profile["sourceDigest"], "items": [
+        {"note": notes[0], "disposition": "handled"}]}
+    assert preference_profile.validate_unresolved_acknowledgements(value, profile, EVIDENCE, CONDITIONS) == value
+    assert preference_profile.validate_unresolved_acknowledgements(
+        {"sourceDigest": profile["sourceDigest"], "items": []}, profile, EVIDENCE, CONDITIONS)["items"] == []
+    for invalid in (
+        {**value, "sourceDigest": "0" * 64},
+        {"sourceDigest": profile["sourceDigest"], "items": value["items"] * 2},
+        {"sourceDigest": profile["sourceDigest"], "items": [{**value["items"][0], "disposition": "forged"}]},
+        {"sourceDigest": profile["sourceDigest"], "items": [{"note": {**notes[0], "message": "tampered"}, "disposition": "ignored"}]},
+    ):
+        with pytest.raises(ValueError):
+            preference_profile.validate_unresolved_acknowledgements(invalid, profile, EVIDENCE, CONDITIONS)
+    with pytest.raises(ValueError):
+        preference_profile.validate_unresolved_acknowledgements(value, {**profile, "status": "stale"}, EVIDENCE, CONDITIONS)
+
+
+def test_private_storage_metadata_is_removed_only_at_trusted_storage_boundary():
+    client_draft = {"originalText": EVIDENCE, "likes": None, "avoid": None, "avoidImportance": "required",
+                    "food": None, "foodImportance": "preferred", "walking": None, "scheduleItems": []}
+    with pytest.raises(PrepFailure):
+        validate_draft({**client_draft, "_unresolvedAcknowledgements": {"sourceDigest": "0" * 64, "items": []}})
+    stored = {**client_draft, "_unresolvedAcknowledgements": {"private": True}}
+    assert stored_draft_without_private_metadata(stored) == client_draft
+    assert stored["_unresolvedAcknowledgements"] == {"private": True}
 
 
 def test_later_manual_save_without_receipt_preserves_exact_model_facts_only():
