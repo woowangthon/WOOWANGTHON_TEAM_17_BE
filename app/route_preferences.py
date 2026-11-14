@@ -14,7 +14,7 @@ from typing import Any
 
 from .confirmed_preferences import ALIASES, analyze_preferences
 
-POLICY_VERSION = "atomic-route-v1"
+POLICY_VERSION = "atomic-route-v2"
 _TOURISM = {"sightseeing_stop", "culture_stop", "activity_stop", "shopping_stop", "date_specific_event"}
 _LODGING = {"overnight_lodging", "overnight_camping"}
 
@@ -70,12 +70,18 @@ def _atom_key(atom: dict[str, Any]) -> str:
 
 def _matcher(atom: dict[str, Any], vocabulary: set[str]) -> tuple[str, str | None] | None:
     dimension, target = atom.get("dimension"), atom.get("target")
-    if dimension == "visit_count" and target in {
-        "방문 장소", "방문 장소 수", "관광지", "관광지 수", "관광 장소", "관광 장소 수", "장소", "sightseeing",
+    compact = "".join(target.split()) if isinstance(target, str) else ""
+    if compact in {"\uacf3", "\uad70\ub370"}:
+        return ("sightseeing", None) if dimension == "visit_count" and _frequency(atom) is not None else None
+    if dimension == "visit_count" and compact in {
+        "\ubc29\ubb38\uc7a5\uc18c", "\ubc29\ubb38\uc7a5\uc18c\uc218", "\uad00\uad11\uc9c0",
+        "\uad00\uad11\uc9c0\uc218", "\uad00\uad11\uc7a5\uc18c", "\uad00\uad11\uc7a5\uc18c\uc218",
+        "\uc7a5\uc18c", "sightseeing",
     }:
         return "sightseeing", None
     if dimension in {"meal_plan", "food"} and target in {
-        "식사", "식사 횟수", "끼니", "끼니 수", "식당", "meal", "meals", "meal_stop",
+        "\uc2dd\uc0ac", "\uc2dd\uc0ac \ud69f\uc218", "\ub07c\ub2c8", "\ub07c\ub2c8 \uc218", "\uc2dd\ub2f9",
+        "meal", "meals", "meal_stop",
     }:
         return "meals", None
     tag = target if target in vocabulary else next(
@@ -87,6 +93,13 @@ def _matcher(atom: dict[str, Any], vocabulary: set[str]) -> tuple[str, str | Non
     if dimension in {"activity", "visit_count"}:
         return "tag_activity", tag
     return "tag", tag
+
+
+def _three_meal_periods(target: Any) -> bool:
+    if not isinstance(target, str):
+        return False
+    periods = re.split(r"[\s\u00b7\u318d,\uff0c/]+", target.strip())
+    return len(periods) == 3 and set(periods) == {"\uc544\uce68", "\uc810\uc2ec", "\uc800\ub141"}
 
 
 def compile_route_preferences(snapshot_doc: dict[str, Any], catalog: Any) -> dict[str, Any]:
@@ -167,6 +180,18 @@ def compile_route_preferences(snapshot_doc: dict[str, Any], catalog: Any) -> dic
                 continue
             if frequency:
                 scope = frequency["period"]
+            if dimension == "meal_plan" and _three_meal_periods(atom.get("target")):
+                if not frequency or frequency["period"] != "day" or frequency["count"] != 3 or frequency["operator"] != "exact":
+                    (issues if hard else warnings).append({"field": field, "code": "REQUIRED_PREFERENCE_UNSUPPORTED" if hard else "ATOMIC_PREFERENCE_UNSUPPORTED"})
+                    continue
+                if hard:
+                    issues.append({"field": field, "code": "REQUIRED_PREFERENCE_UNSUPPORTED"})
+                    continue
+                count_rules.append({"memberRef": ref, "dimension": "meals", "tag": None,
+                                    "scope": "day", "operator": "exact", "count": 3,
+                                    "required": False, "polarity": polarity})
+                warnings.append({"field": field, "code": "ATOMIC_PREFERENCE_UNSUPPORTED"})
+                continue
             matcher = _matcher(atom, supported)
             unsupported = (matcher is None or (hard and (approximate or dimension == "accessibility"
                            or scope is None or frequency is not None and frequency["operator"] == "target")))

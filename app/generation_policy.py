@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
-GENERATION_POLICY_VERSION = "atomic-route-soft-meals-alns-mmr-car40-v5"
+GENERATION_POLICY_VERSION = "atomic-route-soft-meals-alns-mmr-car40-v6"
 CAR_LEG_MAX_SECONDS = 40 * 60
 
 
