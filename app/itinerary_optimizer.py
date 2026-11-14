@@ -12,7 +12,7 @@ import time
 from collections import Counter, deque
 from typing import Any, Callable
 
-from .generation_policy import GENERATION_POLICY_VERSION
+from .generation_policy import GENERATION_POLICY_VERSION, place_distance_km
 from .meal_preferences import meal_deviation_minutes
 
 
@@ -116,11 +116,17 @@ def _category_repetitions(draft: dict[str, Any], candidates: dict[int, dict[str,
 
 
 def _rank(draft: dict[str, Any], plan: dict[str, Any], candidates: dict[int, dict[str, Any]],
-          anchors: set[tuple[str, int]] | None = None, semantic_context: Any = None, *, activity_window=None):
+          anchors: set[tuple[str, int]] | None = None, semantic_context: Any = None, *, activity_window=None,
+          route_preferences=None, catalog=None):
     travel = _travel_seconds(plan)
     meal_deviation = meal_deviation_minutes(plan, candidates, anchors, activity_window=activity_window)
     # Unknown routes are never assigned a zero cost or treated as an improvement.
-    return (sum(_violations(plan).values()), -_preference_score(draft, candidates, anchors, semantic_context),
+    unknown_quotas, quota_penalty = 0, 0.0
+    if route_preferences is not None and catalog is not None:
+        from .route_preferences import route_preference_cost
+        unknown_quotas, quota_penalty = route_preference_cost(plan, route_preferences, catalog)
+    return (sum(_violations(plan).values()),
+            (unknown_quotas, quota_penalty - _preference_score(draft, candidates, anchors, semantic_context)),
             meal_deviation if meal_deviation is not None else float("inf"),
             travel if travel is not None else float("inf"))
 
@@ -139,6 +145,9 @@ def _anchored_positions(settings: dict[str, Any]) -> dict[tuple[str, int], int]:
 
 def _risk_counts(plan: dict[str, Any]) -> Counter:
     risks = Counter()
+    for code in plan["validation"].get("warnings", []):
+        if code == "REQUIRED_PREFERENCE_UNVERIFIED":
+            risks[("atomicPreferences", code)] += 1
     for domain in ("route", "walking", "time", "budget", "openingHours"):
         value = plan["validation"].get(domain, {})
         for code in value.get("reasonCodes", []):
@@ -174,6 +183,43 @@ def _valid_candidate(draft: dict[str, Any], baseline_visit_count: int, pool: dic
     # A route-order move cannot silently drop a current visit. Pool selection
     # may replace one with another eligible candidate, but count stays fixed.
     return visit_count == baseline_visit_count
+
+
+def _replace_stop(draft, day_index, position, candidate):
+    changed = copy.deepcopy(draft)
+    fields = ("contentid", "title", "planningRole", "adminCity", "coordinate", "estimatedStayMinutes", "categoryKey")
+    changed["days"][day_index]["places"][position] = {
+        **{key: candidate[key] for key in fields if key in candidate}, "visitPosition": position,
+    }
+    return changed
+
+
+def _requested_visit_swaps(current, pool, anchors, rules):
+    """Try nearby, eligible alternatives for a missing visit before generic diversity moves."""
+    days = current["days"]
+    dates = {day["date"] for day in days}
+    visits = [[p["contentid"] for p in day["places"]] for day in days]
+    used = {cid for day_ids in visits for cid in day_ids}
+    trials = {}
+    for rule in rules:
+        matches = set(rule["contentids"])
+        daily_counts = [sum(cid in matches for cid in day_ids) for day_ids in visits]
+        trip_count = sum(daily_counts)
+        for index, day in enumerate(days):
+            covered = daily_counts[index] if rule["period"] == "day" else trip_count
+            if covered >= rule["count"]:
+                continue
+            candidates = [pool[cid] for cid in matches - used if day["date"] in pool[cid].get("allowedDates", dates)]
+            for position, old_id in enumerate(visits[index]):
+                old = pool.get(old_id)
+                if (not old or old.get("planningRole") not in _FLEXIBLE_ROLES or old_id in matches
+                        or (day["date"], old_id) in anchors):
+                    continue
+                for row in candidates:
+                    key = (index, position, row["contentid"])
+                    trials[key] = (place_distance_km(old, row), row.get("selectionRank", 0), key)
+    for index, position, cid in sorted(trials, key=trials.get):
+        yield "requested_visit", _replace_stop(current, index, position, pool[cid])
 
 
 def _phase_neighbors(current: dict[str, Any], pool: dict[int, dict[str, Any]], anchors: dict[tuple[str, int], int],
@@ -262,19 +308,16 @@ def _phase_neighbors(current: dict[str, Any], pool: dict[int, dict[str, Any]], a
                     replacement = info.get("contentid")
                     if type(replacement) is not int:
                         continue
-                    changed = copy.deepcopy(current)
-                    changed["days"][day_index]["places"][source] = {
-                        **{k: v for k, v in info.items() if k in {"contentid", "title", "planningRole", "adminCity", "coordinate", "estimatedStayMinutes", "categoryKey"}},
-                        "visitPosition": source,
-                    }
-                    yield "candidate_replace", changed
+                    yield "candidate_replace", _replace_stop(current, day_index, source, info)
 
 
-def _neighbors(current, pool, anchors, max_visits_per_day, semantic_context=None):
+def _neighbors(current, pool, anchors, max_visits_per_day, semantic_context=None, requested_rules=()):
     """Share the bounded evaluation budget across methods and trip days."""
     pending = deque(_phase_neighbors(current, pool, anchors, max_visits_per_day, phase, day, semantic_context)
                     for day in range(len(current["days"]))
                     for phase in ("two_opt", "relocate", "date_reallocation", "candidate_replace"))
+    if requested_rules:
+        pending.appendleft(_requested_visit_swaps(current, pool, anchors, requested_rules))
     while pending:
         iterator = pending.popleft()
         try:
@@ -289,7 +332,7 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
                        evaluate: Callable[[dict[str, Any]], tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
                        *, max_visits_per_day: int = 8, max_evaluations: int = 24,
                        time_budget_seconds: float = 1.0, semantic_context: Any = None,
-                       search_budget: Any = None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+                       search_budget: Any = None, route_preferences: Any = None, catalog: Any = None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Try a small set of local moves and retain only fully checked safe gains.
 
     `evaluate` returns (scheduled draft, public validation plan, adjusted settings).
@@ -297,6 +340,7 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
     deadline. A new hard violation or unknown validation warning rejects a move.
     """
     baseline = copy.deepcopy(draft)
+    route_preferences = route_preferences if route_preferences is not None else settings.get("_routePreferences")
     pool = {row["contentid"]: row for row in candidate_pool
             if isinstance(row, dict) and type(row.get("contentid")) is int}
     ids = {p["contentid"] for day in draft["days"] for p in day["places"]}
@@ -314,7 +358,7 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
     anchor_ids = set(anchors)
     activity_window = current_settings.get("activityWindow") or settings.get("activityWindow")
     current_rank = _rank(current_draft, current_plan, pool, anchor_ids, semantic_context,
-                         activity_window=activity_window)
+                         activity_window=activity_window, route_preferences=route_preferences, catalog=catalog)
     attempted = accepted = 0
     utility_screened = 0
     attempted_by_phase = Counter()
@@ -323,10 +367,23 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
                 else time.monotonic() + max(0.01, min(time_budget_seconds, 1.0)))
     fallback = None
     seen = {_visit_ids(current_draft)}
-    for phase, neighbor in _neighbors(current_draft, pool, anchors, max_visits_per_day, semantic_context):
+    requested_rules = []
+    if route_preferences and catalog is not None:
+        from .route_preferences import draft_preference_rules
+        market_goals = [rule for rule in route_preferences.get("countRules", [])
+                        if rule.get("dimension") == "market" and rule["operator"] in {"min", "exact", "target"}
+                        and rule["count"] > 0]
+        if market_goals:
+            requested_rules = draft_preference_rules({"countRules": market_goals}, catalog, list(pool))
+    neighbors = _neighbors(current_draft, pool, anchors, max_visits_per_day, semantic_context, requested_rules)
+    while True:
         if attempted >= max_evaluations or time.monotonic() >= deadline:
             fallback = "SEARCH_BUDGET_REACHED"
             break
+        move = next(neighbors, None)
+        if move is None:
+            break
+        phase, neighbor = move
         signature = _visit_ids(neighbor)
         if signature in seen:
             continue
@@ -342,7 +399,8 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
         # the six-route budget on it before reaching useful diversity moves.
         # This check is outside the lazy generator so the wall-clock deadline
         # still applies to every screened candidate.
-        if (not _violations(current_plan)
+        if (not _violations(current_plan) and not (route_preferences and (
+                route_preferences.get("countRules") or route_preferences.get("walkingRules")))
                 and _preference_score(neighbor, pool, anchor_ids, semantic_context)
                 < _preference_score(current_draft, pool, anchor_ids, semantic_context)):
             utility_screened += 1
@@ -367,12 +425,16 @@ def optimize_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidat
                 or risks - initial_risks or risks - current_risks):
             continue
         new_rank = _rank(scheduled, plan, pool, anchor_ids, semantic_context,
-                         activity_window=adjusted.get("activityWindow") or activity_window)
+                         activity_window=adjusted.get("activityWindow") or activity_window,
+                         route_preferences=route_preferences, catalog=catalog)
         if new_rank < current_rank:
             current_draft, current_plan, current_settings = scheduled, plan, adjusted
             current_rank = new_rank
             accepted += 1
             accepted_by_phase[phase] += 1
+            if phase == "requested_visit":
+                # Another day may still need a visit. Recompute from the accepted itinerary.
+                neighbors = _neighbors(current_draft, pool, anchors, max_visits_per_day, semantic_context, requested_rules)
     if current_draft is baseline_scheduled:
         fallback = fallback or "NO_SAFE_IMPROVEMENT"
     metrics = {

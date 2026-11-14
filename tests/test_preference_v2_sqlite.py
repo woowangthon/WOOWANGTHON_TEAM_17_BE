@@ -1,0 +1,340 @@
+"""HTTP/SQL v2 roundtrip, using a private SQLite adapter (not MySQL validation)."""
+import copy
+import json
+import uuid
+from datetime import datetime
+from types import SimpleNamespace
+
+import pytest
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import StaticPool
+
+from app.preparation import register_preparation_routes, validate_conditions
+from app.generation_foundation import capture_confirmed_preparation
+from chungbuk_trip_ai.ensemble import interpret_personal_draft_v2
+from preparation_helpers import CONDITIONS
+from chungbuk_trip_ai import build_atomic_preferences
+
+
+class ApiError(Exception):
+    def __init__(self, status, code, message="", fields=None, retry=None):
+        self.status, self.code, self.fields = status, code, fields or {}
+
+
+class Result:
+    def __init__(self, result): self.result = result
+    def mappings(self): return self
+    def first(self):
+        row = self.result.mappings().first()
+        if row is None: return None
+        row = dict(row)
+        for key in ("expires_at", "lease_expires_at", "confirmed_at"):
+            if isinstance(row.get(key), str): row[key] = datetime.fromisoformat(row[key])
+        return row
+    def all(self): return [dict(row) for row in self.result.mappings().all()]
+    def __getattr__(self, key): return getattr(self.result, key)
+
+
+class Connection:
+    def __init__(self, conn): self.conn = conn
+    def execute(self, statement, params=None):
+        sql = str(statement).replace(" FOR UPDATE", "")
+        if "GET_LOCK(" in sql or "RELEASE_LOCK(" in sql: sql = "SELECT 1"
+        return Result(self.conn.execute(text(sql), params or {}))
+    def __getattr__(self, key): return getattr(self.conn, key)
+
+
+@pytest.fixture
+def personal_v2():
+    engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    trip, member, session = (str(uuid.uuid4()) for _ in range(3))
+    conditions = validate_conditions(CONDITIONS)
+    with engine.begin() as conn:
+        for ddl in (
+            "CREATE TABLE trips(id TEXT,name TEXT,invite_code TEXT,status TEXT)",
+            "CREATE TABLE trip_members(id TEXT,trip_id TEXT,nickname TEXT,role TEXT,status TEXT,created_at TEXT)",
+            "CREATE TABLE device_session_memberships(session_id TEXT,trip_id TEXT,member_id TEXT)",
+            "CREATE TABLE trip_preparation_documents(trip_id TEXT,conditions_json TEXT,conditions_version INTEGER)",
+            "CREATE TABLE member_preparation_documents(trip_id TEXT,member_id TEXT,draft_json TEXT,preference_version INTEGER,confirmed_conditions_version INTEGER,confirmed_preference_version INTEGER,confirmed_at DATETIME)",
+            "CREATE TABLE preparation_interpret_requests(session_id TEXT,method TEXT,path TEXT,idempotency_key TEXT,trip_id TEXT,member_id TEXT,conditions_version INTEGER,preference_version INTEGER,fingerprint TEXT,status TEXT,lease_token TEXT,lease_expires_at DATETIME,result_json TEXT,created_at DATETIME,expires_at DATETIME)",
+        ): conn.execute(text(ddl))
+        conn.execute(text("INSERT INTO trips VALUES(:t,'test','CB-TEST','OPEN')"), {"t": trip})
+        conn.execute(text("INSERT INTO trip_members VALUES(:m,:t,'owner','OWNER','ACTIVE','1')"), {"m": member, "t": trip})
+        conn.execute(text("INSERT INTO device_session_memberships VALUES(:s,:t,:m)"), {"s": session, "t": trip, "m": member})
+        conn.execute(text("INSERT INTO trip_preparation_documents VALUES(:t,:c,1)"), {"t": trip, "c": json.dumps(conditions)})
+    app = FastAPI()
+    @app.exception_handler(ApiError)
+    async def api_error(_request, exc):
+        return JSONResponse({"code": exc.code, "fieldErrors": exc.fields}, status_code=exc.status)
+    async def body_json(request, _keys): return await request.json()
+    register_preparation_routes(app, SimpleNamespace(connect=lambda: Connection(engine.connect())),
+        SimpleNamespace(rate_limit_enabled=False), find_session=lambda *_: {"id": session},
+        cookie_name=lambda: "device", origin_check=lambda *_: None, body_json=body_json,
+        ApiError=ApiError, set_session_cookie=lambda *_: None)
+    evidence = "여행 중 초밥을 한 번 먹고 싶어요"
+    atom = {"dimension": "food", "target": "초밥", "polarity": "prefer", "priority": "preferred", "priorityBasis": "unspecified",
+            "scope": "trip", "audience": "personal", "frequency": {"count": 1, "operator": "exact", "period": "trip"},
+            "value": None, "unit": None, "approximate": False, "evidence": evidence}
+    raw = {"conditions": [atom], "unresolved": [], "scheduleItems": []}
+    app.state.preparation_interpreter_v2 = lambda original, fixed: interpret_personal_draft_v2(original, fixed, provider="ensemble",
+        providers={"gemini": lambda *_: copy.deepcopy(raw), "qwen": lambda *_: copy.deepcopy(raw)})
+    with TestClient(app) as client:
+        yield client, engine, trip, evidence
+    engine.dispose()
+
+
+def test_v2_http_sql_analysis_receipt_confirm_and_changed_common_conditions(personal_v2):
+    client, engine, trip, original = personal_v2
+    path = f"/api/v1/trips/{trip}/preferences/me"
+    headers = {"X-Preference-Schema": "2"}
+    draft = {"originalText": original, "likes": None, "avoid": None, "avoidImportance": "preferred", "food": None,
+             "foodImportance": "preferred", "walking": None, "scheduleItems": []}
+    source = client.put(path, headers=headers, json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 0, "draft": draft})
+    assert source.status_code == 200, source.text
+    key = str(uuid.uuid4())
+    analysis = client.post(path + "/interpret", headers={**headers, "Idempotency-Key": key},
+                           json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 1})
+    assert analysis.status_code == 200, analysis.text
+    result = analysis.json()
+    assert result["analysisMeta"]["requestId"] == key
+    merged = {"originalText": original, **result["suggestions"]}
+    body = {"expectedConditionsVersion": 1, "expectedPreferenceVersion": 1, "draft": merged, "analysisReceipt": key}
+    rejected = client.put(path, headers=headers, json={**body, "analysisReceipt": str(uuid.uuid4())})
+    assert rejected.status_code == 409 and rejected.json()["code"] == "STALE_AI_RESULT"
+    saved = client.put(path, headers=headers, json=body)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["draft"]["atomicPreferences"]["conditions"][0]["origin"] == "model"
+    assert "atomicPreferences" not in client.get(path).json()["draft"]
+    confirmed = client.post(path + "/confirm", headers=headers,
+        json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 2, "reviewed": True})
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["confirmation"]["status"] == "confirmed"
+    reviewed_profile = saved.json()["draft"]["atomicPreferences"]
+    with engine.begin() as conn:
+        changed = {**validate_conditions(CONDITIONS), "startDate": "2026-12-13", "endDate": "2026-12-14"}
+        conn.execute(text("UPDATE trip_preparation_documents SET conditions_json=:j,conditions_version=2"), {"j": json.dumps(changed)})
+    stale_doc = client.get(path, headers=headers).json()["draft"]
+    stale = stale_doc["atomicPreferences"]
+    assert stale["status"] == "stale"
+    assert stale["sourceDigest"] == reviewed_profile["sourceDigest"]
+    assert [a["id"] for a in stale["conditions"]] == [a["id"] for a in reviewed_profile["conditions"]]
+    echoed = client.put(path, headers=headers, json={"expectedConditionsVersion": 2,
+        "expectedPreferenceVersion": 2, "draft": stale_doc})
+    assert echoed.status_code == 200, echoed.text
+    assert echoed.json()["preferenceVersion"] == 3
+    assert echoed.json()["draft"]["atomicPreferences"]["sourceDigest"] == reviewed_profile["sourceDigest"]
+    assert [a["id"] for a in echoed.json()["draft"]["atomicPreferences"]["conditions"]] == [a["id"] for a in reviewed_profile["conditions"]]
+    direct_confirm = client.post(path + "/confirm", headers=headers,
+        json={"expectedConditionsVersion": 2, "expectedPreferenceVersion": 3, "reviewed": True})
+    assert direct_confirm.status_code == 400, direct_confirm.text
+    assert "atomicPreferences" in direct_confirm.json()["fieldErrors"]
+
+
+@pytest.mark.parametrize("source_mode", ["replace", "append"])
+@pytest.mark.parametrize("profile_mode", ["omitted", "stored_echo", "ui_stale_echo"])
+def test_source_change_accepts_only_server_profile_echo_as_stale_and_clears_ack(personal_v2, profile_mode, source_mode):
+    client, engine, trip, original = personal_v2
+    path = f"/api/v1/trips/{trip}/preferences/me"
+    headers = {"X-Preference-Schema": "2"}
+    initial = {"originalText": original, "likes": None, "avoid": None, "avoidImportance": "preferred",
+               "food": None, "foodImportance": "preferred", "walking": None, "scheduleItems": []}
+    assert client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 0, "draft": initial}).status_code == 200
+    receipt = str(uuid.uuid4())
+    analyzed = client.post(path + "/interpret", headers={**headers, "Idempotency-Key": receipt},
+        json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 1})
+    assert analyzed.status_code == 200, analyzed.text
+    current = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 1, "analysisReceipt": receipt,
+        "draft": {"originalText": original, **analyzed.json()["suggestions"]}})
+    assert current.status_code == 200, current.text
+    profile = current.json()["draft"]["atomicPreferences"]
+    ack = {"sourceDigest": profile["sourceDigest"], "items": []}
+    acknowledged = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 2, "draft": current.json()["draft"], "unresolvedAcknowledgements": ack})
+    assert acknowledged.status_code == 200, acknowledged.text
+    assert acknowledged.json()["preferenceVersion"] == 3
+    assert client.post(path + "/confirm", headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 3, "reviewed": True}).status_code == 200
+
+    changed = copy.deepcopy(acknowledged.json()["draft"])
+    changed["originalText"] = ("새 원문에는 이전 근거가 전혀 없습니다." if source_mode == "replace"
+                                else original + "\n새 원문을 뒤에 덧붙였습니다.")
+    if profile_mode == "omitted":
+        changed.pop("atomicPreferences")
+    elif profile_mode == "ui_stale_echo":
+        changed["atomicPreferences"]["status"] = "stale"
+    saved = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 3, "draft": changed})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["preferenceVersion"] == 4
+    stale = saved.json()["draft"]["atomicPreferences"]
+    assert stale["status"] == "stale"
+    assert stale["sourceDigest"] == profile["sourceDigest"]
+    assert [a["id"] for a in stale["conditions"]] == [a["id"] for a in profile["conditions"]]
+    assert saved.json()["confirmation"]["status"] == "writing"
+    assert "unresolvedAcknowledgements" not in saved.json()
+    with engine.connect() as conn:
+        stored = json.loads(conn.execute(text("SELECT draft_json FROM member_preparation_documents WHERE trip_id=:t"), {"t": trip}).scalar_one())
+    assert "_unresolvedAcknowledgements" not in stored
+    retry = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 4, "draft": saved.json()["draft"]})
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["preferenceVersion"] == 4
+
+
+def test_stale_profile_echo_does_not_accept_forged_evidence(personal_v2):
+    client, _engine, trip, original = personal_v2
+    path = f"/api/v1/trips/{trip}/preferences/me"
+    headers = {"X-Preference-Schema": "2"}
+    initial = {"originalText": original, "likes": None, "avoid": None, "avoidImportance": "preferred",
+               "food": None, "foodImportance": "preferred", "walking": None, "scheduleItems": []}
+    client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 0, "draft": initial})
+    receipt = str(uuid.uuid4())
+    result = client.post(path + "/interpret", headers={**headers, "Idempotency-Key": receipt},
+        json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 1}).json()
+    saved = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 1, "analysisReceipt": receipt,
+        "draft": {"originalText": original, **result["suggestions"]}})
+    forged = copy.deepcopy(saved.json()["draft"])
+    forged["originalText"] = "새 원문"
+    forged["atomicPreferences"]["conditions"][0]["evidence"] = "조작된 근거"
+    rejected = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 2, "draft": forged})
+    assert rejected.status_code == 400
+    current = client.get(path, headers=headers).json()
+    assert current["preferenceVersion"] == 2
+    assert current["draft"]["originalText"] == original
+    retry_body = copy.deepcopy(saved.json()["draft"])
+    retry_body["originalText"] = "새 원문에는 이전 근거가 전혀 없습니다."
+    retried = client.put(path, headers=headers, json={"expectedConditionsVersion": 1,
+        "expectedPreferenceVersion": 2, "draft": retry_body})
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["preferenceVersion"] == 3
+    assert retried.json()["draft"]["atomicPreferences"]["status"] == "stale"
+
+
+def test_v2_manual_atomic_correction_updates_legacy_and_legacy_only_edit_cannot_recertify_old_atoms(personal_v2):
+    client, _engine, trip, original = personal_v2
+    path = f"/api/v1/trips/{trip}/preferences/me"
+    headers = {"X-Preference-Schema": "2"}
+    draft = {"originalText": original, "likes": None, "avoid": None, "avoidImportance": "preferred", "food": None,
+             "foodImportance": "preferred", "walking": None, "scheduleItems": []}
+    assert client.put(path, headers=headers, json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 0, "draft": draft}).status_code == 200
+    key = str(uuid.uuid4())
+    result = client.post(path + "/interpret", headers={**headers, "Idempotency-Key": key}, json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 1}).json()
+    saved = client.put(path, headers=headers, json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 1, "analysisReceipt": key,
+        "draft": {"originalText": original, **result["suggestions"]}}).json()
+    corrected = copy.deepcopy(saved["draft"])
+    corrected["atomicPreferences"]["conditions"][0].update(target="피자", frequency={"count": 2, "operator": "exact", "period": "day"}, scope="day")
+    edited = client.put(path, headers=headers, json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 2, "draft": corrected})
+    assert edited.status_code == 200, edited.text
+    document = edited.json()["draft"]
+    assert document["food"] == "피자"
+    assert document["atomicPreferences"]["conditions"][0]["origin"] == "user"
+    assert document["atomicPreferences"]["status"] == "current"
+    inconsistent = client.put(path, headers=headers, json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 3,
+        "draft": {**document, "food": "국수"}})
+    assert inconsistent.status_code == 200, inconsistent.text
+    assert inconsistent.json()["draft"]["atomicPreferences"]["status"] == "stale"
+
+
+def test_invalid_v2_output_is_safe_502_and_interpretation_lease_can_retry(personal_v2):
+    client, _engine, trip, original = personal_v2
+    path = f"/api/v1/trips/{trip}/preferences/me"
+    headers = {"X-Preference-Schema": "2"}
+    draft = {"originalText": original, "likes": None, "avoid": None, "avoidImportance": "preferred", "food": None,
+             "foodImportance": "preferred", "walking": None, "scheduleItems": []}
+    client.put(path, headers=headers, json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 0, "draft": draft})
+    good = client.app.state.preparation_interpreter_v2
+    def invalid(*args):
+        result = good(*args)
+        result["atomicPreferences"]["conditions"][0]["dimension"] = "unsupported"
+        return result
+    client.app.state.preparation_interpreter_v2 = invalid
+    key = str(uuid.uuid4())
+    body = {"expectedConditionsVersion": 1, "expectedPreferenceVersion": 1}
+    failed = client.post(path + "/interpret", headers={**headers, "Idempotency-Key": key}, json=body)
+    assert failed.status_code == 502 and failed.json()["code"] == "AI_INVALID_RESPONSE"
+    client.app.state.preparation_interpreter_v2 = good
+    assert client.post(path + "/interpret", headers={**headers, "Idempotency-Key": key}, json=body).status_code == 200
+
+
+def test_v2_unresolved_acknowledgements_roundtrip_validation_and_privacy(personal_v2):
+    client, engine, trip, original = personal_v2
+    path = f"/api/v1/trips/{trip}/preferences/me"
+    headers = {"X-Preference-Schema": "2"}
+    initial = {"originalText": original, "likes": None, "avoid": None, "avoidImportance": "preferred", "food": None,
+               "foodImportance": "preferred", "walking": None, "scheduleItems": []}
+    assert client.put(path, headers=headers, json={"expectedConditionsVersion": 1, "expectedPreferenceVersion": 0,
+        "draft": initial}).status_code == 200
+    unresolved = [{"code": "food_frequency_ambiguous", "evidence": "한 번", "message": "횟수를 확인해 주세요."}]
+    atom = {"dimension": "food", "target": "초밥", "polarity": "prefer", "priority": "preferred",
+            "priorityBasis": "unspecified", "scope": "trip", "audience": "personal",
+            "frequency": {"count": 1, "operator": "exact", "period": "trip"}, "value": None,
+            "unit": None, "approximate": False, "evidence": original}
+    profile = build_atomic_preferences([atom], unresolved, original, validate_conditions(CONDITIONS))
+    with engine.begin() as conn:
+        stored = {**initial, "atomicPreferences": profile}
+        conn.execute(text("UPDATE member_preparation_documents SET draft_json=:d WHERE trip_id=:t"),
+                     {"d": json.dumps(stored, ensure_ascii=False), "t": trip})
+    ack = {"sourceDigest": profile["sourceDigest"], "items": [{"note": unresolved[0], "disposition": "handled"}]}
+    body = {"expectedConditionsVersion": 1, "expectedPreferenceVersion": 1, "draft": stored,
+            "unresolvedAcknowledgements": ack}
+    saved = client.put(path, headers=headers, json=body)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["preferenceVersion"] == 2
+    assert saved.json()["unresolvedAcknowledgements"] == ack
+    assert set(saved.json()["draft"]["atomicPreferences"]) == {"schemaVersion", "sourceDigest", "status", "conditions", "unresolved"}
+    private = client.get(path).json()
+    assert "unresolvedAcknowledgements" not in private
+    assert "atomicPreferences" not in private["draft"]
+    with engine.begin() as conn:
+        internal = json.loads(conn.execute(text("SELECT draft_json FROM member_preparation_documents WHERE trip_id=:t"), {"t": trip}).scalar_one())
+    assert "unresolvedAcknowledgements" not in internal
+    assert internal["_unresolvedAcknowledgements"] == ack
+
+    tampered = copy.deepcopy(ack)
+    tampered["items"][0]["note"]["message"] = "forged"
+    invalid = client.put(path, headers=headers, json={**body, "expectedPreferenceVersion": 2,
+        "unresolvedAcknowledgements": tampered})
+    assert invalid.status_code == 400
+    assert client.get(path, headers=headers).json()["preferenceVersion"] == 2
+
+    confirmed = client.post(path + "/confirm", headers=headers, json={
+        "expectedConditionsVersion": 1, "expectedPreferenceVersion": 2, "reviewed": True})
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["confirmation"]["status"] == "confirmed"
+    with engine.connect() as conn:
+        member_id = conn.execute(text("SELECT id FROM trip_members WHERE trip_id=:t"), {"t": trip}).scalar_one()
+    snapshot = capture_confirmed_preparation(SimpleNamespace(connect=lambda: Connection(engine.connect())), trip,
+        lambda _conn, trip_id: ({"id": "session"}, {"id": trip_id, "status": "OPEN"},
+                                {"id": member_id, "role": "OWNER", "status": "ACTIVE"}))
+    serialized_snapshot = json.dumps(snapshot.as_dict(), ensure_ascii=False)
+    assert snapshot.group_conditions()["unresolved"] == [{"memberRef": "p1", "code": unresolved[0]["code"], "needsReview": True}]
+    assert unresolved[0]["evidence"] not in serialized_snapshot
+    assert unresolved[0]["message"] not in serialized_snapshot
+    assert "_unresolvedAcknowledgements" not in serialized_snapshot
+
+    reset = client.put(path, headers=headers, json={**body, "expectedPreferenceVersion": 2,
+        "unresolvedAcknowledgements": {"sourceDigest": profile["sourceDigest"], "items": []}})
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["preferenceVersion"] == 3
+    assert reset.json()["unresolvedAcknowledgements"]["items"] == []
+
+    changed_conditions = {**validate_conditions(CONDITIONS), "startDate": "2026-12-13", "endDate": "2026-12-14"}
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE trip_preparation_documents SET conditions_json=:j,conditions_version=2"),
+                     {"j": json.dumps(changed_conditions)})
+    stale = client.get(path, headers=headers).json()
+    assert stale["draft"]["atomicPreferences"]["status"] == "stale"
+    assert "unresolvedAcknowledgements" not in stale
+    stale_ack = client.put(path, headers=headers, json={"expectedConditionsVersion": 2,
+        "expectedPreferenceVersion": 3, "draft": stale["draft"],
+        "unresolvedAcknowledgements": {"sourceDigest": profile["sourceDigest"], "items": []}})
+    assert stale_ack.status_code == 400
+    assert client.get(path, headers=headers).json()["draft"]["atomicPreferences"]["status"] == "stale"

@@ -1,5 +1,6 @@
 """Provider deadlines and private errors without DB or external calls."""
 import asyncio
+import json
 import threading
 from types import SimpleNamespace
 
@@ -50,3 +51,24 @@ def test_provider_error_is_safe_and_output_is_detached():
     result = asyncio.run(normalize_snapshot(snapshot, catalog, lambda: snapshot, lambda *_: provider_result))
     provider_result["terms"][0]["tag"] = "changed after completion"
     assert result["normalization"]["terms"][0]["tag"] == "verified"
+
+
+def test_normalizer_provider_receives_only_allowed_fields_while_snapshot_keeps_schedule_data():
+    preferences = [{"memberRef": "p1", "likes": "자연", "avoid": None,
+                    "avoidImportance": "required", "food": None, "foodImportance": "preferred",
+                    "walking": None, "scheduleItems": [{"id": "private-anchor"}]}]
+    snapshot = ConfirmedPreparationSnapshot(
+        '{"confirmedPreferences":' + json.dumps(preferences, ensure_ascii=False) + '}',
+        "source")
+    catalog = SimpleNamespace(supported_tags=(), digest="catalog")
+    observed = []
+
+    def provider(prefs, _):
+        observed.extend(prefs)
+        return {"accepted": True}
+
+    result = asyncio.run(normalize_snapshot(snapshot, catalog, lambda: snapshot, provider))
+    assert set(observed[0]) == {"memberRef", "likes", "avoid", "avoidImportance", "food", "foodImportance", "walking"}
+    assert observed[0]["walking"] is None
+    assert snapshot.confirmed_preferences()[0]["scheduleItems"] == [{"id": "private-anchor"}]
+    assert result["sourceFingerprint"] == "source"

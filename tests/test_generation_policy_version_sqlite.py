@@ -24,7 +24,7 @@ def test_generation_policy_change_invalidates_token_and_prevents_old_draft_save(
         with engine.begin() as raw:
             conn = SQLiteConnectionAdapter(raw)
             current_token, current_status, current_members = service._source_token(conn, "trip", 1, "catalog", 0)
-            monkeypatch.setattr(generation_policy, "GENERATION_POLICY_VERSION", "previous-policy-without-car-cap")
+            monkeypatch.setattr(generation_policy, "GENERATION_POLICY_VERSION", "atomic-route-soft-meals-alns-mmr-car40-v6")
             old_token, old_status, old_members = service._source_token(conn, "trip", 1, "catalog", 0)
             assert old_token != current_token
             assert old_status == current_status and old_members == current_members

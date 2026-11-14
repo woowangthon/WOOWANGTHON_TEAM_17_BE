@@ -18,7 +18,9 @@ from typing import Any, Callable
 from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
 
-from . import confirmed_preferences, generation_foundation as foundation, generation_reviews, place_catalog, preparation, generation_policy
+from . import confirmed_preferences, generation_foundation as foundation, generation_reviews, place_catalog, preparation, preference_profile, generation_policy
+from .group_preferences import build_group_preferences
+from .route_preferences import compile_route_preferences, combine_confirmed_evidence, legacy_preferences
 
 
 class ServiceError(Exception):
@@ -107,15 +109,21 @@ class GenerationService:
                     draft_row = conn.execute(text("SELECT draft_json FROM member_preparation_documents WHERE trip_id=:t AND member_id=:m"), {"t": trip_id, "m": mid}).mappings().first()
                     if not draft_row:
                         raise ValueError("missing confirmed document")
-                    raw_draft = _json(draft_row["draft_json"])
+                    raw_draft = preparation.stored_draft_without_private_metadata(_json(draft_row["draft_json"]))
                     draft = preparation.validate_draft({**raw_draft, "scheduleItems": raw_draft.get("scheduleItems", [])})
                     source_document_digest = hashlib.sha256(_canonical(draft).encode()).hexdigest()
                     from .walking_preferences import resolve_walking_preference
-                    walking_issue = resolve_walking_preference(draft)["issue"]
+                    walking_issue = resolve_walking_preference(draft)["issue"] if draft.get("atomicPreferences") is None else None
                     if walking_issue:
                         required_ready = False
                     if m["role"] == "OWNER":
-                        required_ready = required_ready and bool(draft["likes"] and draft["walking"] in preparation.WALKING)
+                        profile = draft.get("atomicPreferences")
+                        if profile is not None:
+                            conditions, live_cv = preparation._conditions(conn, trip_id)
+                            checked = preference_profile.response_profile_status(profile, draft.get("originalText"), conditions)
+                            required_ready = required_ready and live_cv == cv and not preparation._confirmation_missing({**draft, "atomicPreferences": checked}, 2)
+                        else:
+                            required_ready = required_ready and bool(draft["likes"] and draft["walking"] in preparation.WALKING)
                     _, unresolved = preparation._schedule_clarifications(conn, draft["scheduleItems"])
                     schedule_ready = not unresolved
                 except Exception:
@@ -140,13 +148,14 @@ class GenerationService:
 
     def _confirmed_issues(self, conn, trip_id, catalog, common_settings=None):
         from .candidate_selection import build_supported_tags
-        _, conditions_version = preparation._conditions(conn, trip_id)
+        conditions, conditions_version = preparation._conditions(conn, trip_id)
         members = conn.execute(text("SELECT id,role FROM trip_members WHERE trip_id=:t AND status='ACTIVE' ORDER BY created_at,id FOR UPDATE"), {"t": trip_id}).mappings().all()
         docs = conn.execute(text("SELECT member_id,preference_version,confirmed_conditions_version,confirmed_preference_version,confirmed_at FROM member_preparation_documents WHERE trip_id=:t FOR UPDATE"), {"t": trip_id}).mappings().all()
         by_member = {str(r["member_id"]): r for r in docs}
         tags = build_supported_tags(catalog)
         issues = set()
         confirmed_group = []
+        atomic_members = []
         for member in members:
             doc = by_member.get(str(member["id"]))
             if not doc or not foundation._confirmed_doc(doc, conditions_version): continue
@@ -155,25 +164,32 @@ class GenerationService:
                                          {"t": trip_id, "m": str(member["id"])}).mappings().first()
                 if not draft_row:
                     issues.add("PREPARATION_NOT_READY"); continue
-                raw_draft = _json(draft_row["draft_json"])
+                raw_draft = preparation.stored_draft_without_private_metadata(_json(draft_row["draft_json"]))
                 draft = preparation.validate_draft({**raw_draft, "scheduleItems": raw_draft.get("scheduleItems", [])})
             except Exception:
                 issues.add("PREPARATION_NOT_READY"); continue
             if member["role"] != "OWNER" and any(item["scope"] == "group" for item in draft["scheduleItems"]):
                 issues.add("SCHEDULE_SCOPE_INVALID")
             from .walking_preferences import resolve_walking_preference
-            if resolve_walking_preference(draft)["issue"]:
+            if draft.get("atomicPreferences") is None and resolve_walking_preference(draft)["issue"]:
                 issues.add("REQUIRED_PREFERENCE_UNSATISFIED")
-            pref = {"memberRef": "p1", **{k: draft[k] for k in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking", "scheduleItems")}}
-            confirmed_group.append({**pref, "memberRef": f"p{len(confirmed_group) + 1}"})
+            pref = {"memberRef": f"p{len(confirmed_group) + 1}", **{k: draft[k] for k in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking", "scheduleItems")}}
+            confirmed_group.append(pref)
+            if draft.get("atomicPreferences") is not None:
+                checked = preference_profile.response_profile_status(draft["atomicPreferences"], draft.get("originalText"), conditions)
+                if not isinstance(checked, dict) or checked.get("status") != "current":
+                    issues.add("PREFERENCES_UNCONFIRMED")
+                else:
+                    atomic_members.append({"memberRef": pref["memberRef"], "confirmed": True, "atomicPreferences": checked})
             if member["role"] == "OWNER":
                 try:
                     confirmed_preferences.group_schedule_anchors([pref], common_settings, {"members": [{"memberId": member["id"], "role": "OWNER"}]})
                 except ValueError:
                     issues.add("SCHEDULE_ITEM_CLARIFICATION_REQUIRED")
-            issues.update(item["code"] for item in confirmed_preferences.analyze_preferences([pref], tags)["issues"]
-                          if item["code"].startswith("REQUIRED_"))
-        issues.update(item["code"] for item in confirmed_preferences.analyze_preferences(confirmed_group, tags)["issues"]
+        route_preferences = compile_route_preferences({"conditions": conditions,
+            "atomicMemberRefs": [member["memberRef"] for member in atomic_members],
+            "groupConditions": build_group_preferences(atomic_members)}, catalog)
+        issues.update(item["code"] for item in combine_confirmed_evidence(confirmed_group, tags, route_preferences)["issues"]
                       if item["code"].startswith("REQUIRED_"))
         return sorted(issues)
 
@@ -271,17 +287,25 @@ class GenerationService:
         row = preparation._personal(conn, trip_id, member["id"])
         if not row or not foundation._confirmed_doc(row, cv):
             raise ServiceError("PREFERENCES_UNCONFIRMED", 409)
-        draft = preparation.validate_draft(_json(row["draft_json"]))
+        draft = preparation.validate_draft(preparation.stored_draft_without_private_metadata(_json(row["draft_json"])))
         if not draft["originalText"]:
             raise ServiceError("PREFERENCES_UNCONFIRMED", 409)
+        profile = draft.get("atomicPreferences")
+        checked = preference_profile.response_profile_status(profile, draft.get("originalText"), conditions) if profile is not None else None
+        if profile is not None and (not isinstance(checked, dict) or checked.get("status") != "current"):
+            raise ServiceError("PREFERENCES_UNCONFIRMED", 409)
         prefs = [{"memberRef": "p1", **{k: draft[k] for k in ("likes", "avoid", "avoidImportance", "food", "foodImportance", "walking", "scheduleItems")}}]
+        group_conditions = build_group_preferences([{"memberRef": "p1", "confirmed": True, "atomicPreferences": checked}]) if checked else build_group_preferences([])
         identity = {"tripId": trip_id, "sessionId": session["id"], "actorMemberId": member["id"],
                     "actorRole": member["role"], "conditionsVersion": cv,
                     "members": [{"memberId": member["id"], "preferenceVersion": int(row["preference_version"]),
                                  "confirmedConditionsVersion": int(row["confirmed_conditions_version"]),
                                  "confirmedPreferenceVersion": int(row["confirmed_preference_version"])}]}
-        stamp = {"conditions": conditions, "conditionsVersion": cv, "confirmedPreferences": prefs, "_identity": identity}
-        fingerprint = hashlib.sha256(_canonical({**identity, "confirmedPreferences": prefs}).encode()).hexdigest()
+        atomic_refs = ["p1"] if checked else []
+        stamp = {"conditions": conditions, "conditionsVersion": cv, "confirmedPreferences": prefs,
+                 "groupConditions": group_conditions, "atomicMemberRefs": atomic_refs, "_identity": identity}
+        fingerprint = hashlib.sha256(_canonical({**identity, "confirmedPreferences": prefs,
+                                               "groupConditions": group_conditions, "atomicMemberRefs": atomic_refs}).encode()).hexdigest()
         return foundation.ConfirmedPreparationSnapshot(_canonical(stamp), fingerprint), draft, int(row["preference_version"]), member, session
 
     def get_my_preference(self, request, trip_id):
@@ -322,7 +346,8 @@ class GenerationService:
         tags = list(build_supported_tags(catalog))
         fn = self.app.state.generation_normalizer
         try:
-            call = asyncio.to_thread(fn, snapshot.confirmed_preferences(), tags) if fn else asyncio.to_thread(self._default_normalizer, snapshot.confirmed_preferences(), tags)
+            provider_preferences = foundation.normalizer_input(snapshot.confirmed_preferences())
+            call = asyncio.to_thread(fn, provider_preferences, tags) if fn else asyncio.to_thread(self._default_normalizer, provider_preferences, tags)
             raw = await asyncio.wait_for(call, timeout=self.app.state.generation_normalize_timeout)
             raw = json.loads(json.dumps(raw, ensure_ascii=False, allow_nan=False))
         except asyncio.TimeoutError:
@@ -351,7 +376,8 @@ class GenerationService:
         except Exception:
             raise foundation.GenerationFoundationError("AI_UNAVAILABLE") from None
         try:
-            return normalize_confirmed_preferences(confirmed_preferences=preferences, supported_tags=tags)
+            return normalize_confirmed_preferences(
+                confirmed_preferences=foundation.normalizer_input(preferences), supported_tags=tags)
         except GeminiTimeoutError:
             raise foundation.GenerationFoundationError("AI_TIMEOUT") from None
         except GeminiUnavailableError:
@@ -416,7 +442,8 @@ class GenerationService:
                 raise ServiceError("GENERATION_IN_PROGRESS", retry=1)
             norm_digest = hashlib.sha256(_canonical(raw).encode()).hexdigest()
             norm_id = str(uuid.uuid4())
-            current_draft = preparation.validate_draft(_json(preparation._personal(conn, trip_id, member["id"])["draft_json"]))
+            current_draft = preparation.validate_draft(preparation.stored_draft_without_private_metadata(
+                _json(preparation._personal(conn, trip_id, member["id"])["draft_json"])))
             current_catalog = place_catalog.load_place_catalog(conn, lock=True)
             if current_catalog.digest != catalog_digest:
                 raise ServiceError("STALE_PLACE_CATALOG")
@@ -717,12 +744,14 @@ class GenerationService:
             remapped_prefs = doc["confirmedPreferences"]
             issues = self._confirmed_issues(conn, trip_id, catalog, gen_settings)
             if issues: raise ServiceError(issues[0])
-            confirmed = confirmed_preferences.analyze_preferences(remapped_prefs, build_supported_tags(catalog))
+            route_preferences = compile_route_preferences(doc, catalog)
+            confirmed = combine_confirmed_evidence(remapped_prefs, build_supported_tags(catalog), route_preferences)
             gen_settings = {**gen_settings, "confirmedScheduleAnchors": confirmed_preferences.group_schedule_anchors(
-                remapped_prefs, gen_settings, doc.get("_identity"))}
+                remapped_prefs, gen_settings, doc.get("_identity")), "_routePreferences": route_preferences}
             hard_issue = next((x["code"] for x in confirmed["issues"] if x["code"].startswith("REQUIRED_")), None)
             if hard_issue: raise ServiceError(hard_issue)
-            selection = build_confirmed_candidate_selection(snapshot, catalog, confirmed, gen_settings)
+            selection = build_confirmed_candidate_selection(snapshot, catalog, confirmed, gen_settings,
+                                                            route_preferences=route_preferences)
             if not selection.ready_for_draft:
                 issues = selection.as_dict()["unresolvedRequired"]
                 code = next((x for x in issues if x.startswith("REQUIRED_PREFERENCE_")), "REQUIRED_PREFERENCE_UNSATISFIED")
@@ -763,9 +792,13 @@ class GenerationService:
         remaining = deadline - time.monotonic()
         if remaining <= 0: raise ServiceError("AI_TIMEOUT", 504)
         router = self.app.state.generation_router
-        document = build_scheduled_plan(draft, catalog, snapshot.as_dict()["conditions"], remapped_prefs,
+        document = build_scheduled_plan(draft, catalog, snapshot.as_dict()["conditions"], legacy_preferences(remapped_prefs, route_preferences),
                                        gen_settings, router, timeout_seconds=min(90, remaining),
                                        semantic_context=semantic_context)
+        if (any(item.get("code") in {"REQUIRED_PREFERENCE_UNSATISFIED", "REQUIRED_PREFERENCE_UNSUPPORTED"}
+                for item in document["validation"]["violations"])
+                or "REQUIRED_PREFERENCE_UNVERIFIED" in document["validation"]["warnings"]):
+            raise ServiceError("REQUIRED_PREFERENCE_UNSATISFIED")
         if time.monotonic() >= deadline: raise ServiceError("AI_TIMEOUT", 504)
         conn = self._conn()
         try:

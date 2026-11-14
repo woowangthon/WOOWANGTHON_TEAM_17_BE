@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +15,7 @@ from app.place_catalog import load_place_catalog
 
 
 @pytest.fixture
-def pipeline():
+def pipeline(request):
     engine = create_engine("sqlite+pysqlite:///:memory:")
     metadata = MetaData()
     places = Table("places", metadata, Column("contentid", Integer), Column("title", String),
@@ -35,6 +36,12 @@ def pipeline():
                                          "feeText": None, "openingHoursText": None} for cid in (11, 22)])
         conn.execute(prefs_table.insert(), [{"contentid": cid, "preferenceTags": "자연", "vibeTags": "조용한"}
                                            for cid in (11, 22)])
+        if getattr(request, "param", None) == "market":
+            conn.execute(places.insert(), {"contentid": 33, "title": "단양구경시장",
+                         "planningRole": "shopping_stop", "recommendationUse": "SPECIAL_SHOPPING",
+                         "adminCity": "단양군", "mapx": "127.4342", "mapy": "36.6286", "geoValidated": "yes"})
+            conn.execute(details.insert(), {"contentid": 33, "planningStatusV2": "candidate_needs_live_validation"})
+            conn.execute(prefs_table.insert(), {"contentid": 33, "preferenceTags": "쇼핑"})
         catalog = load_place_catalog(conn)
     preferences = [{"memberRef": "p1", "likes": "자연", "avoid": None, "avoidImportance": "required",
                     "food": None, "foodImportance": "preferred", "walking": "20"}]
@@ -105,3 +112,42 @@ def test_review_bound_to_previous_catalog_or_unreviewed_source_is_not_adopted(pi
     with pytest.raises(CandidateSelectionError, match="STALE_REVIEW"):
         asyncio.run(generate_candidate_draft(snapshot, normalization, catalog, dict(review, catalogDigest="stale"),
                     lambda: snapshot, lambda: catalog, drafter=lambda *_: pytest.fail("must not call AI")))
+
+
+@pytest.mark.parametrize("pipeline", ["market"], indirect=True)
+def test_confirmed_market_visit_reaches_canvas_when_the_provider_omits_it(pipeline):
+    from app.candidate_selection import build_supported_tags
+    from app.canvas_import import replace_generated_plan
+    from app.day_schedule import build_scheduled_plan
+    from app.generation_service import _default_settings
+    from app.route_preferences import combine_confirmed_evidence, compile_route_preferences
+    from test_routing_validation import Router
+
+    original, _, catalog, _ = pipeline
+    document = original.as_dict()
+    member = document["confirmedPreferences"][0]
+    member.update(likes=None, walking=None)
+    document["conditions"].update(departureContentid=11, transport="walk", returnRoute=None)
+    document["atomicMemberRefs"] = ["p1"]
+    document["groupConditions"] = {"softSupport": [{
+        "dimension": "activity", "target": "시장", "polarity": "prefer", "priority": "preferred",
+        "scope": "trip", "memberReferences": ["p1"], "supportType": "soft",
+    }]}
+    raw = json.dumps(document, ensure_ascii=False, sort_keys=True)
+    snapshot = ConfirmedPreparationSnapshot(raw, hashlib.sha256(raw.encode()).hexdigest())
+    rules = compile_route_preferences(document, catalog)
+    evidence = combine_confirmed_evidence([member], build_supported_tags(catalog), rules)
+    settings = {**_default_settings(), "_routePreferences": rules}
+
+    def omit_market(dates, candidates, fixed, maximum, schedule_context):
+        assert schedule_context["preferenceRules"] == [{
+            "contentids": [33], "period": "trip", "operator": "min", "count": 1, "required": False}]
+        return {"days": [{"date": day, "contentids": [cid]} for day, cid in zip(dates, [11, 22])]}
+
+    draft = asyncio.run(generate_candidate_draft(
+        snapshot, None, catalog, None, lambda: snapshot, lambda: catalog,
+        common_settings=settings, confirmed_evidence=evidence, drafter=omit_market)).as_dict()
+    plan = build_scheduled_plan(draft, catalog, document["conditions"], [member], settings, Router())
+    canvas = replace_generated_plan({"schemaVersion": 4}, *(str(uuid.uuid4()) for _ in range(3)), plan)
+    assert [node["contentid"] for node in canvas["nodes"]].count(33) == 1
+    assert len(canvas["days"]) == 2 and not plan["validation"]["violations"]

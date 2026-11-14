@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import math
 import random
 import time
 from collections import Counter
 from typing import Any, Callable
 
+from .generation_policy import place_distance_km
 from .itinerary_optimizer import (
     _base_utility,
     _category_repetitions,
@@ -131,29 +131,13 @@ def _meal_counts(draft: dict[str, Any], pool: dict[int, dict[str, Any]]) -> dict
             for day in draft.get("days", [])}
 
 
-def _distance_km(a: dict[str, Any], b: dict[str, Any]) -> float:
-    ca, cb = a.get("coordinate"), b.get("coordinate")
-    if not isinstance(ca, dict) or not isinstance(cb, dict):
-        return 30.0
-    try:
-        lat1, lon1 = math.radians(float(ca["latitude"])), math.radians(float(ca["longitude"]))
-        lat2, lon2 = math.radians(float(cb["latitude"])), math.radians(float(cb["longitude"]))
-        if not all(math.isfinite(x) for x in (lat1, lon1, lat2, lon2)):
-            return 30.0
-        dlat, dlon = lat2 - lat1, lon2 - lon1
-        h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
-        return 6371.0 * 2 * math.asin(min(1.0, math.sqrt(max(0.0, h))))
-    except (KeyError, TypeError, ValueError, OverflowError):
-        return 30.0
-
-
 def _position_cost(day_places: list[dict[str, Any]], position: int, candidate: dict[str, Any]) -> float:
     """A geometry-only tie-breaker; never used to accept an itinerary."""
     before = day_places[position - 1] if position else None
     after = day_places[position] if position < len(day_places) else None
-    base = _distance_km(before, after) if before and after else 0.0
-    added = ((_distance_km(before, candidate) if before else 0.0)
-             + (_distance_km(candidate, after) if after else 0.0))
+    base = place_distance_km(before, after) if before and after else 0.0
+    added = ((place_distance_km(before, candidate) if before else 0.0)
+             + (place_distance_km(candidate, after) if after else 0.0))
     return added - base
 
 
@@ -186,7 +170,7 @@ def _destroy(draft: dict[str, Any], pool: dict[int, dict[str, Any]], anchors: se
             0 if x["date"] == seed["date"] else 1,
             0 if (pool.get(x["place"]["contentid"], {}).get("categoryKey")
                   == seed_row.get("categoryKey")) else 1,
-            _distance_km(seed_row, pool.get(x["place"]["contentid"], x["place"])),
+            place_distance_km(seed_row, pool.get(x["place"]["contentid"], x["place"])),
             x["index"], x["place"]["contentid"]))[:size]
     else:  # weak utility and same-category redundancy
         category_counts: Counter = Counter()
@@ -373,7 +357,8 @@ def repair_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidate_
                      *, reference_plan: dict[str, Any], semantic_context: Any = None,
                      max_visits_per_day: int = 8, max_evaluations: int = 24,
                      time_budget_seconds: float = 1.0,
-                     deadline: float | None = None, search_budget: SearchBudget | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None,
+                     deadline: float | None = None, search_budget: SearchBudget | None = None,
+                     route_preferences: Any = None, catalog: Any = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None,
                                                             dict[str, Any], dict[str, Any]]:
     """Search bounded multi-stop replacements/date moves and fully validate each.
 
@@ -463,9 +448,11 @@ def repair_itinerary(draft: dict[str, Any], settings: dict[str, Any], candidate_
             try:
                 from .itinerary_optimizer import _rank
                 old_rank = _rank(best_draft, best_plan, pool, anchors, semantic_context,
-                                 activity_window=(best_settings or settings).get("activityWindow"))
+                                 activity_window=(best_settings or settings).get("activityWindow"),
+                                 route_preferences=route_preferences or settings.get("_routePreferences"), catalog=catalog)
                 new_rank = _rank(scheduled, plan, pool, anchors, semantic_context,
-                                 activity_window=adjusted.get("activityWindow") or settings.get("activityWindow"))
+                                 activity_window=adjusted.get("activityWindow") or settings.get("activityWindow"),
+                                 route_preferences=route_preferences or settings.get("_routePreferences"), catalog=catalog)
             except Exception:
                 old_rank = new_rank = (0, 0, float("inf"))
             if new_rank < old_rank:

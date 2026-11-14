@@ -14,7 +14,7 @@ CONDITIONS = {
 }
 DRAFT = {
     "originalText": "테스트용 개인 원문. 자연과 조용한 카페를 좋아합니다.",
-    "likes": "자연과 카페", "avoid": "장거리 도보", "avoidImportance": "required",
+    "likes": "자연과 카페", "avoid": "오래 걷는 것은 싫어요", "avoidImportance": "required",
     "food": "맵지 않은 음식", "foodImportance": "preferred", "walking": "20", "scheduleItems": [],
 }
 SUGGESTION = {"suggestions": {key: value for key, value in DRAFT.items() if key != "originalText"},

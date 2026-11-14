@@ -31,5 +31,10 @@ def test_preparation_migration_round_trip_preserves_existing_schema_and_rows(cli
     assert snapshot() == before
     prep = client.get(base(room) + "/preparation").json()
     assert prep["conditionsVersion"] == 0
-    assert prep["conditions"] == {key: None for key in CONDITIONS}
+    assert prep["conditions"] == {**{key: None for key in CONDITIONS}, "departureTime": "09:00"}
+    personal = client.get(base(room) + "/preferences/me").json()
+    assert personal["clarifications"] == []
+    assert personal["draft"] == {"originalText": None, "likes": None, "avoid": None,
+        "avoidImportance": "required", "food": None, "foodImportance": "preferred",
+        "walking": None, "scheduleItems": []}
     assert prep["trip"]["id"] == trip_id

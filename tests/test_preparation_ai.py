@@ -37,7 +37,8 @@ def test_ai_success_is_only_proposal_and_persists_idempotent_result_across_resta
     key = str(uuid.uuid4())
     response = interpret(client, room, key=key)
     assert response.status_code == 200, response.text
-    assert response.json() == {"sourceConditionsVersion": 0, "sourcePreferenceVersion": 1, **SUGGESTION}
+    assert response.json() == {"sourceConditionsVersion": 0, "sourcePreferenceVersion": 1,
+                               **SUGGESTION, "clarifications": []}
     assert client.get(base(room) + "/preferences/me").json() == before
     assert observed[0][0] == DRAFT["originalText"]
     replay = interpret(client, room, key=key)
@@ -167,7 +168,7 @@ def test_ai_releases_db_locks_and_rechecks_after_source_or_authorization_changes
     assert "suggestions" not in response.json()
 
 
-def test_successful_ai_replay_rechecks_current_versions_and_input_fingerprint(client, app):
+def test_successful_ai_replay_noop_then_rechecks_changed_versions_and_input_fingerprint(client, app):
     room = create_room(client)
     assert save_personal(client, room).status_code == 200
     calls = []
@@ -178,8 +179,19 @@ def test_successful_ai_replay_rechecks_current_versions_and_input_fingerprint(cl
 
     app.state.preparation_interpreter = provider
     key = str(uuid.uuid4())
-    assert interpret(client, room, key=key).status_code == 200
-    assert save_personal(client, room, pv=1).status_code == 200
+    first = interpret(client, room, key=key)
+    assert first.status_code == 200, first.text
+    assert first.json()["clarifications"] == []
+    same_draft = save_personal(client, room, pv=1)
+    assert same_draft.status_code == 200, same_draft.text
+    assert same_draft.json()["preferenceVersion"] == 1
+    replay = interpret(client, room, key=key)
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == first.json()
+    assert len(calls) == 1
+    changed = save_personal(client, room, pv=1, likes="자연과 조용한 전시")
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["preferenceVersion"] == 2
     stale = interpret(client, room, key=key)
     assert stale.status_code == 409
     assert stale.json()["error"]["code"] == "STALE_AI_RESULT"

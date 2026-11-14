@@ -18,6 +18,7 @@ def normalize(preferences, tags):
     assert "자연" in tags, "normalizer must receive observed catalog vocabulary"
     terms, unmapped, walking = [], [], []
     for pref in preferences:
+        assert set(pref) == {"memberRef", "likes", "avoid", "avoidImportance", "food", "foodImportance", "walking"}
         ref = pref["memberRef"]
         for field in ("likes", "avoid", "food"):
             if not pref.get(field):
@@ -143,7 +144,7 @@ def test_complete_generation_save_refresh_and_idempotency(app, client, ready):
     with app.state.engine.connect() as conn:
         assert conn.scalar(text("SELECT COUNT(*) FROM generation_jobs WHERE kind='GENERATE'")) == 1
     with app.state.engine.begin() as conn:
-        conn.execute(text("UPDATE generation_jobs SET expires_at=DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 SECOND) WHERE id=:id"), {"id": job["id"]})
+        conn.execute(text("UPDATE generation_jobs SET created_at=DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 2 SECOND), expires_at=DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 SECOND) WHERE id=:id"), {"id": job["id"]})
     expired_replay = client.post(base(ready) + "/generation/jobs", headers=headers(key=key), json=body)
     assert expired_replay.status_code == 202 and expired_replay.json()["id"] == job["id"]
     assert client.get(base(ready) + "/generation").json()["latestPlan"]["current"] is True

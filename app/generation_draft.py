@@ -76,7 +76,7 @@ def _validate(dates, candidates, fixed_visits, max_visits_per_day, result, sched
                                         {"days": result["days"]}, schedule_context)
 
 
-def _schedule_context(snapshot, common_settings, dates, catalog):
+def _schedule_context(snapshot, common_settings, dates, catalog, candidate_ids=()):
     """Pass only confirmed clock windows and captured endpoints to the model."""
     conditions = snapshot.as_dict()["conditions"]
     settings = common_settings or {}
@@ -108,6 +108,12 @@ def _schedule_context(snapshot, common_settings, dates, catalog):
                 times[(a["date"], a["contentid"])] = {"date": a["date"], "contentid": a["contentid"], **clocks}
     if times:
         context["fixedTimes"] = list(times.values())
+    compiled = settings.get("_routePreferences")
+    if compiled:
+        from .route_preferences import draft_preference_rules
+        rules = draft_preference_rules(compiled, catalog, list(candidate_ids))
+        if rules:
+            context["preferenceRules"] = rules
     return context
 
 
@@ -158,13 +164,23 @@ async def generate_candidate_draft(snapshot, normalization_result, catalog, revi
     deadline = loop.time() + timeout_seconds
     dates = _trip_dates(snapshot)
     # Rebuild from bound source/review data; never trust an external readiness flag.
-    selection = (build_confirmed_candidate_selection(snapshot, catalog, confirmed_evidence, common_settings, policy)
+    route_preferences = (common_settings or {}).get("_routePreferences")
+    if route_preferences is None and snapshot.as_dict().get("atomicMemberRefs"):
+        from .route_preferences import compile_route_preferences, combine_confirmed_evidence
+        from .candidate_selection import build_supported_tags
+        document = snapshot.as_dict()
+        route_preferences = compile_route_preferences(document, catalog)
+        confirmed_evidence = combine_confirmed_evidence(document["confirmedPreferences"], build_supported_tags(catalog), route_preferences)
+        common_settings = {**(common_settings or {}), "_routePreferences": route_preferences}
+    selection = (build_confirmed_candidate_selection(snapshot, catalog, confirmed_evidence, common_settings, policy,
+                                                     **({"route_preferences": route_preferences} if route_preferences else {}))
                  if confirmed_evidence is not None
                  else build_candidate_selection(snapshot, normalization_result, catalog, review, policy))
     if not selection.ready_for_draft:
         raise GenerationDraftError("CANDIDATE_REVIEW_REQUIRED")
     candidates, fixed_visits = selection.draft_candidates(), selection.fixed_visits()
-    schedule_context = _schedule_context(snapshot, common_settings, dates, catalog)
+    schedule_context = _schedule_context(snapshot, common_settings, dates, catalog,
+                                         [candidate["contentid"] for candidate in candidates])
     async def propose():
         await _fresh(snapshot, catalog, recapture, reload_catalog)
         # A local provider/stub may mutate its arguments. Keep the validator's
