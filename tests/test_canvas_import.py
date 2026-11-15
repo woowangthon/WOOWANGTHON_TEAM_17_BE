@@ -346,6 +346,179 @@ def test_import_cas_atomic_marker_and_repeat_after_deletion_preserve_latest(impo
     assert again.json()["document"]["nodes"] == []
 
 
+def test_visit_time_override_requires_genuine_unlocked_schedule_and_keeps_kst_dates(import_app):
+    client, engine, service = import_app
+    # Give the unlocked first stop an actual schedule and update the immutable
+    # generation payload used by the authority check.
+    service.plan = generated_plan()
+    service.plan["days"][0]["nodes"][1].update(
+        estimatedStartAt="2026-11-11T04:00:00.000Z", estimatedEndAt="2026-11-11T05:00:00.000Z")
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE plan_versions SET validation_result=:payload WHERE id=:v"),
+                     {"payload": json.dumps({"schema": "generation.v1", "document": service.plan}), "v": VERSION})
+
+    day = str(uuid.uuid5(uuid.UUID(TRIP), "canvas-day:" + DATE))
+    v4 = {"schemaVersion": 4, "days": [{"id": day, "date": DATE}], "nodes": [], "edges": [],
+          "dayLinks": [], "visitTimeVersion": 1}
+    assert put_canvas(client, 0, v4).status_code == 200
+    imported = import_request(client, revision=1)
+    assert imported.status_code == 200, imported.text
+    document = imported.json()["document"]
+    assert document["visitTimeVersion"] == 1
+    eligible = next(node for node in document["nodes"] if node["source"]["nodeId"] == P1)
+    locked = next(node for node in document["nodes"] if node["source"]["nodeId"] == P2)
+    eligible["visitTime"] = {"startAt": "2026-11-11T03:30:00.000Z", "endAt": "2026-11-11T04:30:00.000Z"}
+    accepted = put_canvas(client, 2, document, {"planId": PLAN, "versionId": VERSION})
+    assert accepted.status_code == 200, accepted.text
+    persisted = accepted.json()["document"]
+    assert next(node for node in persisted["nodes"] if node["id"] == eligible["id"])["visitTime"] == eligible["visitTime"]
+
+    def save_variant(mutate):
+        draft = copy.deepcopy(persisted)
+        target = next(node for node in draft["nodes"] if node["id"] == eligible["id"])
+        mutate(draft, target)
+        return put_canvas(client, 3, draft, {"planId": PLAN, "versionId": VERSION})
+
+    wrong_date = save_variant(lambda _doc, target: target.update(
+        visitTime={"startAt": "2026-11-12T03:30:00.000Z", "endAt": "2026-11-12T04:30:00.000Z"}))
+    assert wrong_date.status_code == 400
+    locked_override = save_variant(lambda doc, _target: next(n for n in doc["nodes"] if n["id"] == locked["id"]).update(
+        visitTime={"startAt": "2026-11-11T05:30:00.000Z", "endAt": "2026-11-11T06:30:00.000Z"}))
+    assert locked_override.status_code == 400
+    forged = save_variant(lambda _doc, target: target["schedule"].update(locked=True))
+    assert forged.status_code == 400
+    reversed_time = save_variant(lambda _doc, target: target.update(
+        visitTime={"startAt": "2026-11-11T04:30:00.000Z", "endAt": "2026-11-11T03:30:00.000Z"}))
+    assert reversed_time.status_code == 400
+
+    # Undo removes the override while preserving the capability marker.
+    undone = copy.deepcopy(persisted)
+    next(node for node in undone["nodes"] if node["id"] == eligible["id"]).pop("visitTime")
+    undo_response = put_canvas(client, 3, undone, {"planId": PLAN, "versionId": VERSION})
+    assert undo_response.status_code == 200, undo_response.text
+    assert undo_response.json()["document"]["visitTimeVersion"] == 1
+
+    # Removing the final override cannot remove the capability marker.
+    no_override = copy.deepcopy(persisted)
+    next(node for node in no_override["nodes"] if node["id"] == eligible["id"]).pop("visitTime")
+    no_override.pop("visitTimeVersion")
+    downgrade = put_canvas(client, 4, no_override, {"planId": PLAN, "versionId": VERSION})
+    assert downgrade.status_code == 409
+    assert downgrade.json()["error"]["code"] == "SCHEMA_VERSION_CONFLICT"
+
+    # A genuine replacement keeps the marker and clears all card-level overrides.
+    service.version = V2
+    service.plan = generated_plan()
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO plan_versions VALUES(:v,:p,:t,:d)"),
+                     {"v": V2, "p": PLAN, "t": TRIP,
+                      "d": json.dumps({"schema": "generation.v1", "document": service.plan})})
+    replacement = client.post(f"/api/v1/trips/{TRIP}/plans/{PLAN}/canvas", headers=headers(),
+                              json={"versionId": V2, "expectedCanvasRevision": 4})
+    assert replacement.status_code == 200, replacement.text
+    replaced_doc = replacement.json()["document"]
+    assert replaced_doc["visitTimeVersion"] == 1
+    assert all("visitTime" not in node for node in replaced_doc["nodes"])
+
+
+def test_visit_time_v2_manual_relative_legacy_utc_fence_replay_and_reimport(import_app):
+    client, engine, service = import_app
+    service.plan = generated_plan()
+    service.plan["days"][0]["nodes"][1].update(
+        estimatedStartAt="2026-11-11T04:00:00.000Z", estimatedEndAt="2026-11-11T05:00:00.000Z")
+    partial_id = "00000000-0000-4000-8000-000000000120"
+    service.plan["days"][0]["nodes"].append({"id": partial_id, "kind": "PLACE", "contentid": 103,
+                                             "estimatedStartAt": "2026-11-11T07:00:00.000Z",
+                                             "estimatedEndAt": None, "locked": False})
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE plan_versions SET validation_result=:payload WHERE id=:v"),
+                     {"payload": json.dumps({"schema": "generation.v1", "document": service.plan}), "v": VERSION})
+        conn.execute(text("INSERT INTO places SELECT 103,'Partial schedule',contentTypeName,planningRole,adminCity,addr1,addr2,mapx,mapy,geoValidated,tel,homepageUrl,overviewText,firstimage,recommendationUse FROM places WHERE contentid=101"))
+
+    day = str(uuid.uuid5(uuid.UUID(TRIP), "canvas-day:" + DATE))
+    v4 = {"schemaVersion": 4, "days": [{"id": day, "date": DATE}], "nodes": [], "edges": [],
+          "dayLinks": [], "visitTimeVersion": 2}
+    assert put_canvas(client, 0, v4).status_code == 200
+    imported = import_request(client, revision=1)
+    assert imported.status_code == 200, imported.text
+    document = imported.json()["document"]
+    assert document["visitTimeVersion"] == 2
+    managed = next(node for node in document["nodes"] if node["source"]["nodeId"] == P1)
+    managed["visitTime"] = {"startAt": "2026-11-11T03:30:00.000Z", "endAt": "2026-11-11T04:30:00.000Z"}
+    partial = next(node for node in document["nodes"] if node["source"]["nodeId"] == partial_id)
+    assert partial["schedule"]["startAt"] and partial["schedule"]["endAt"] is None
+    partial["visitTime"] = {"startTime": "16:00", "endTime": "17:00"}
+
+    relative_on_complete = copy.deepcopy(document)
+    next(node for node in relative_on_complete["nodes"] if node["id"] == managed["id"])["visitTime"] = {
+        "startTime": "12:30", "endTime": "13:30"}
+    rejected = put_canvas(client, 2, relative_on_complete, {"planId": PLAN, "versionId": VERSION})
+    assert rejected.status_code == 400
+
+    undated_day = "00000000-0000-4000-8000-000000000118"
+    document["days"].append({"id": undated_day, "date": None})
+    manual_dated = {"id": PLACE, "kind": "place", "dayId": day, "position": {"x": 20, "y": 20},
+                    "color": "lime", "contentid": 101, "intent": "candidate",
+                    "visitTime": {"startTime": "10:05", "endTime": "11:30"}}
+    manual_undated = {"id": "00000000-0000-4000-8000-000000000119", "kind": "place", "dayId": undated_day,
+                      "position": {"x": 40, "y": 20}, "color": "sky", "contentid": 102, "intent": "route",
+                      "visitTime": {"startTime": "13:00", "endTime": "14:00"}}
+    document["nodes"].extend([manual_dated, manual_undated])
+
+    key = str(uuid.uuid4())
+    body = {"expectedRevision": 2, "expectedSourcePlan": {"planId": PLAN, "versionId": VERSION},
+            "document": document}
+    saved = client.put(f"/api/v1/trips/{TRIP}/canvas", json=body, headers=headers(key))
+    assert saved.status_code == 200, saved.text
+    result_document = saved.json()["document"]
+    assert result_document["visitTimeVersion"] == 2
+    assert next(node for node in result_document["nodes"] if node["id"] == PLACE)["visitTime"] == manual_dated["visitTime"]
+    assert next(node for node in result_document["nodes"] if node["id"] == manual_undated["id"])["visitTime"] == manual_undated["visitTime"]
+    assert next(node for node in result_document["nodes"] if node["id"] == managed["id"])["visitTime"] == managed["visitTime"]
+    assert next(node for node in result_document["nodes"] if node["id"] == partial["id"])["visitTime"] == partial["visitTime"]
+    replay = client.put(f"/api/v1/trips/{TRIP}/canvas", json=body, headers=headers(key))
+    assert replay.status_code == 200 and replay.json() == saved.json()
+
+    # A normal subsequent edit retains the override. Marker 2 cannot be lowered
+    # to either version 1 or the unmarked shape at the current revision.
+    edited = copy.deepcopy(result_document)
+    next(node for node in edited["nodes"] if node["id"] == PLACE)["position"] = {"x": 35, "y": 40}
+    updated = put_canvas(client, 3, edited, {"planId": PLAN, "versionId": VERSION})
+    assert updated.status_code == 200
+    assert updated.json()["document"]["visitTimeVersion"] == 2
+    assert next(node for node in updated.json()["document"]["nodes"] if node["id"] == PLACE)["visitTime"] == manual_dated["visitTime"]
+    stale_lower = copy.deepcopy(updated.json()["document"])
+    stale_lower["visitTimeVersion"] = 1
+    stale_response = put_canvas(client, 3, stale_lower, {"planId": PLAN, "versionId": VERSION})
+    assert stale_response.status_code == 409
+    assert stale_response.json()["error"]["code"] == "VERSION_CONFLICT"
+    wrong_source_response = put_canvas(client, 4, stale_lower, None)
+    assert wrong_source_response.status_code == 409
+    assert wrong_source_response.json()["error"]["code"] == "VERSION_CONFLICT"
+    for lower in (1, None):
+        draft = copy.deepcopy(updated.json()["document"])
+        if lower is None:
+            draft.pop("visitTimeVersion")
+        else:
+            draft["visitTimeVersion"] = lower
+        response = put_canvas(client, 4, draft, {"planId": PLAN, "versionId": VERSION})
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "SCHEMA_VERSION_CONFLICT"
+
+    service.version = V2
+    service.plan = generated_plan()
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO plan_versions VALUES(:v,:p,:t,:d)"),
+                     {"v": V2, "p": PLAN, "t": TRIP,
+                      "d": json.dumps({"schema": "generation.v1", "document": service.plan})})
+    replacement = client.post(f"/api/v1/trips/{TRIP}/plans/{PLAN}/canvas", headers=headers(),
+                              json={"versionId": V2, "expectedCanvasRevision": 4})
+    assert replacement.status_code == 200, replacement.text
+    replaced_doc = replacement.json()["document"]
+    assert replaced_doc["visitTimeVersion"] == 2
+    assert all("visitTime" not in node for node in replaced_doc["nodes"])
+
+
 def test_import_conflict_rolls_back_marker_and_request(import_app):
     client, engine, _ = import_app
     conflict = import_request(client, revision=99)

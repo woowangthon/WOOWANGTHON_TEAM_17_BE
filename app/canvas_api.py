@@ -369,10 +369,6 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
                                    "versionId": canvas_models.canonical_uuid(expected_source["versionId"])}
         except (CanvasValidationError, TypeError):
             raise ApiError(400, "VALIDATION_ERROR", "입력을 확인해 주세요.") from None
-        try:
-            document = canvas_models.validate_document(body["document"])
-        except CanvasValidationError:
-            raise ApiError(400, "VALIDATION_ERROR", "캔버스 문서를 확인해 주세요.") from None
         key = request_key(request)
         fingerprint = hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         def persist():
@@ -391,13 +387,23 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
                         result = reservation["replay"]
                     else:
                         existing = store.load_document(conn, trip_id)
+                        raw_document = body["document"]
                         if (existing["revision"] if existing else 0) != body["expectedRevision"]:
                             raise CanvasError("VERSION_CONFLICT", 409)
                         source = existing["sourcePlan"] if existing else None
                         if source != expected_source:
                             raise CanvasError("VERSION_CONFLICT", 409)
-                        if existing and existing["document"].get("schemaVersion") == 4 and document["schemaVersion"] == 3:
+                        if existing and existing["document"].get("schemaVersion") == 4 and isinstance(raw_document, dict) and raw_document.get("schemaVersion") == 3:
                             raise CanvasError("SCHEMA_VERSION_CONFLICT", 409)
+                        prior_visit_time_version = existing["document"].get("visitTimeVersion") if existing else None
+                        next_visit_time_version = raw_document.get("visitTimeVersion", 0) if isinstance(raw_document, dict) else 0
+                        if (prior_visit_time_version is not None and type(next_visit_time_version) is int
+                                and next_visit_time_version < prior_visit_time_version):
+                            raise CanvasError("SCHEMA_VERSION_CONFLICT", 409)
+                        try:
+                            document = canvas_models.validate_document(raw_document)
+                        except CanvasValidationError:
+                            raise CanvasError("VALIDATION_ERROR", 400) from None
                         # A tab opened on a stacked legacy document may still submit
                         # that entire draft. Accept its current edits without restoring retired routes.
                         current_doc = canvas_import.current_route_document(document, source["versionId"]) if source else document

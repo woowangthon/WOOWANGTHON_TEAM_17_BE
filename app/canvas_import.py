@@ -75,6 +75,11 @@ def replace_generated_plan(document, trip_id, plan_id, version_id, plan):
         if schema_version not in (3, 4):
             raise CanvasImportError("PLAN_INVALID")
         result = {"schemaVersion": schema_version, "days": [], "nodes": [], "edges": []}
+        visit_time_version = document.get("visitTimeVersion")
+        if schema_version == 4 and type(visit_time_version) is int and visit_time_version in {1, 2}:
+            # The opt-in is a canvas capability marker. A regenerated plan is a
+            # full replacement, so retain the capability while rebuilding nodes.
+            result["visitTimeVersion"] = visit_time_version
         if schema_version == 4:
             result["dayLinks"] = []
         for day_index, day in enumerate(plan["days"]):
