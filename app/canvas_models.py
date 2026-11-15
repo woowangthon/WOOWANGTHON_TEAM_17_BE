@@ -5,7 +5,7 @@ import json
 import math
 import re
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 
@@ -70,7 +70,12 @@ def validate_document(document: Any) -> dict[str, Any]:
     if not isinstance(document, dict) or type(document.get("schemaVersion")) is not int or document["schemaVersion"] not in {3, 4}:
         raise CanvasValidationError("invalid document shape")
     version = document["schemaVersion"]
+    visit_time_version = document.get("visitTimeVersion")
+    if "visitTimeVersion" in document and (type(visit_time_version) is not int or visit_time_version not in {1, 2} or version != 4):
+        raise CanvasValidationError("invalid visit time version")
     expected_keys = {"schemaVersion", "days", "nodes", "edges"} | ({"dayLinks"} if version == 4 else set())
+    if "visitTimeVersion" in document:
+        expected_keys.add("visitTimeVersion")
     if set(document) != expected_keys:
         raise CanvasValidationError("invalid document shape")
     days, nodes, edges = document["days"], document["nodes"], document["edges"]
@@ -121,6 +126,8 @@ def validate_document(document: Any) -> dict[str, Any]:
         expected = COMMON_NODE_KEYS | ({"contentid", "intent"} if kind == "place" else {"text"} if kind == "comment" else set())
         if kind == "place" and ("source" in node or "schedule" in node):
             expected |= {"source", "schedule"}
+        if kind == "place" and "visitTime" in node:
+            expected.add("visitTime")
         if set(node) != expected or not isinstance(kind, str) or kind not in {"place", "comment"}:
             raise CanvasValidationError("invalid node fields")
         node_id = canonical_uuid(node["id"])
@@ -156,6 +163,47 @@ def validate_document(document: Any) -> dict[str, Any]:
                 if start and end and end < start:
                     raise CanvasValidationError("invalid schedule interval")
                 clean.update(source=source, schedule={"startAt": start, "endAt": end, "locked": schedule["locked"]})
+            if "visitTime" in node:
+                if version != 4 or visit_time_version not in {1, 2}:
+                    raise CanvasValidationError("invalid visit time")
+                visit_time = node["visitTime"]
+                if not isinstance(visit_time, dict):
+                    raise CanvasValidationError("invalid visit time")
+                if set(visit_time) == {"startTime", "endTime"}:
+                    if visit_time_version != 2:
+                        raise CanvasValidationError("relative visit time requires version 2")
+                    start_time, end_time = visit_time["startTime"], visit_time["endTime"]
+                    if (not isinstance(start_time, str) or not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", start_time)
+                            or not isinstance(end_time, str) or not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", end_time)
+                            or end_time <= start_time):
+                        raise CanvasValidationError("invalid relative visit time interval")
+                    schedule = clean.get("schedule")
+                    if schedule and schedule["locked"]:
+                        raise CanvasValidationError("locked schedule cannot be overridden")
+                    if schedule and schedule["startAt"] and schedule["endAt"]:
+                        raise CanvasValidationError("complete imported schedule requires UTC visit time")
+                    clean["visitTime"] = {"startTime": start_time, "endTime": end_time}
+                elif set(visit_time) == {"startAt", "endAt"}:
+                    if "source" not in node:
+                        raise CanvasValidationError("UTC visit time requires imported schedule")
+                    schedule = clean.get("schedule")
+                    if (not schedule or not schedule["startAt"] or not schedule["endAt"] or schedule["locked"]):
+                        raise CanvasValidationError("visit time requires an unlocked scheduled import")
+                    start, end = _timestamp(visit_time["startAt"]), _timestamp(visit_time["endAt"])
+                    if not start or not end or end <= start:
+                        raise CanvasValidationError("invalid visit time interval")
+                    kst = timezone(timedelta(hours=9))
+                    try:
+                        for endpoint in ("startAt", "endAt"):
+                            scheduled_date = datetime.fromisoformat(schedule[endpoint].replace("Z", "+00:00")).astimezone(kst).date()
+                            override_date = datetime.fromisoformat(visit_time[endpoint].replace("Z", "+00:00")).astimezone(kst).date()
+                            if scheduled_date != override_date:
+                                raise CanvasValidationError("visit time must retain the imported KST date")
+                    except OverflowError:
+                        raise CanvasValidationError("visit time has an invalid KST date") from None
+                    clean["visitTime"] = {"startAt": start, "endAt": end}
+                else:
+                    raise CanvasValidationError("invalid visit time shape")
         else:
             clean["text"] = _text(node["text"], 1, 1000, multiline=True)
             if not clean["text"].strip():
@@ -187,6 +235,8 @@ def validate_document(document: Any) -> dict[str, Any]:
             seen.add(current)
             current = outgoing[current]
     clean = {"schemaVersion": version, "days": clean_days, "nodes": clean_nodes, "edges": clean_edges}
+    if "visitTimeVersion" in document:
+        clean["visitTimeVersion"] = visit_time_version
     if version == 4:
         day_links = document["dayLinks"]
         if not isinstance(day_links, list) or len(day_links) > MAX_EDGES:

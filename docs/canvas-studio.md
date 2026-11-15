@@ -1,5 +1,13 @@
 # Shared canvas backend
 
+### Editing a place's visit time
+
+The canvas GET and revision-checked PUT share visit time edits between participants. A v4 document with `visitTimeVersion: 1` supports UTC overrides on unlocked places with complete imported schedules. The two `visitTime` fields, `startAt` and `endAt`, keep their original endpoint dates in Korea and the end must follow the start.
+
+Version 2 also supports a pair of local clocks, `startTime` and `endTime`, on unlocked places added directly or imported with incomplete schedules. Use zero-padded `HH:mm` with a later end on the same day. This works even when the day's calendar date is still unknown. Complete imported visits use UTC with their original endpoint dates. A document can contain both representations on different nodes. Imported schedule and source data remain verifiable independently.
+
+The highest marker persists through undo and plan replacement. A matching-revision save that removes or lowers it returns `409 SCHEMA_VERSION_CONFLICT`. A new generated version starts with its own visit times.
+
 ## Routes
 
 All routes require the existing device cookie and an ACTIVE membership in an OPEN trip. Writes require the configured Origin, `application/json`, and a canonical UUID `Idempotency-Key`. Successful responses use the established cookie refresh and `Cache-Control: no-store` behavior.

@@ -89,6 +89,70 @@ def test_v4_days_and_day_links_are_strict_and_empty_links_are_valid():
             validate_document(invalid)
 
 
+def test_visit_time_model_checks_imported_schedule_eligibility_and_each_kst_date():
+    imported = {"id": N1, "kind": "place", "dayId": DAY, "position": {"x": 1, "y": 2},
+                "color": "default", "contentid": 15, "intent": "route",
+                "source": {"planId": TRIP, "versionId": N2, "nodeId": N1},
+                "schedule": {"startAt": "2026-11-11T14:00:00Z", "endAt": "2026-11-12T02:00:00Z", "locked": False},
+                "visitTime": {"startAt": "2026-11-11T14:30:00Z", "endAt": "2026-11-12T02:30:00Z"}}
+    value = {"schemaVersion": 4, "days": [{"id": DAY, "date": "2026-11-11"}],
+             "nodes": [imported], "edges": [], "dayLinks": [], "visitTimeVersion": 1}
+    assert validate_document(value)["nodes"][0]["visitTime"] == {
+        "startAt": "2026-11-11T14:30:00.000Z", "endAt": "2026-11-12T02:30:00.000Z"}
+    for invalid_node in (
+        {**imported, "schedule": {**imported["schedule"], "locked": True}},
+        {**imported, "schedule": {**imported["schedule"], "endAt": None}},
+        {**imported, "visitTime": {"startAt": "2026-11-12T14:30:00Z", "endAt": "2026-11-12T15:00:00Z"}},
+        {**imported, "visitTime": {"startAt": "2026-11-11T14:30:00Z", "endAt": "2026-11-11T14:45:00Z"}},
+    ):
+        with pytest.raises(CanvasValidationError):
+            validate_document({**value, "nodes": [invalid_node]})
+
+    edge_of_range = {**imported,
+                     "schedule": {"startAt": "9999-12-31T15:00:00Z", "endAt": "9999-12-31T16:00:00Z", "locked": False},
+                     "visitTime": {"startAt": "9999-12-31T15:30:00Z", "endAt": "9999-12-31T16:30:00Z"}}
+    with pytest.raises(CanvasValidationError):
+        validate_document({**value, "nodes": [edge_of_range]})
+
+
+def test_visit_time_v2_accepts_relative_times_on_unmanaged_or_partial_places_only():
+    manual = {"id": N1, "kind": "place", "dayId": DAY, "position": {"x": 1, "y": 2},
+              "color": "default", "contentid": 15, "intent": "candidate",
+              "visitTime": {"startTime": "09:05", "endTime": "10:30"}}
+    partial = {"id": N2, "kind": "place", "dayId": DAY, "position": {"x": 3, "y": 4},
+               "color": "sky", "contentid": 16, "intent": "route",
+               "source": {"planId": TRIP, "versionId": N1, "nodeId": N2},
+               "schedule": {"startAt": "2026-11-11T04:00:00Z", "endAt": None, "locked": False},
+               "visitTime": {"startTime": "13:00", "endTime": "14:00"}}
+    value = {"schemaVersion": 4, "days": [{"id": DAY, "date": None, "position": {"x": 0, "y": 0}}],
+             "nodes": [manual, partial], "edges": [], "dayLinks": [], "visitTimeVersion": 2}
+    clean = validate_document(value)
+    assert clean["visitTimeVersion"] == 2
+    assert clean["nodes"][0]["visitTime"] == {"startTime": "09:05", "endTime": "10:30"}
+    assert clean["nodes"][1]["schedule"]["endAt"] is None
+
+    complete = {**partial, "schedule": {"startAt": "2026-11-11T04:00:00Z",
+                                         "endAt": "2026-11-11T05:00:00Z", "locked": False}}
+    with pytest.raises(CanvasValidationError, match="complete imported schedule"):
+        validate_document({**value, "nodes": [complete]})
+
+    for interval in (
+        {"startTime": "09:00", "endTime": "09:00"},
+        {"startTime": "10:00", "endTime": "09:59"},
+        {"startTime": "9:00", "endTime": "10:00"},
+        {"startTime": "09:00", "endTime": "24:00"},
+        {"startTime": "٠٩:٠٠", "endTime": "10:00"},
+        {"startTime": "09:00", "endTime": "10:00", "date": "2026-11-11"},
+    ):
+        with pytest.raises(CanvasValidationError):
+            validate_document({**value, "nodes": [{**manual, "visitTime": interval}]})
+    locked = {**partial, "schedule": {**partial["schedule"], "locked": True}}
+    with pytest.raises(CanvasValidationError):
+        validate_document({**value, "nodes": [locked]})
+    with pytest.raises(CanvasValidationError):
+        validate_document({**value, "visitTimeVersion": 1, "nodes": [manual]})
+
+
 def test_canvas_cas_idempotency_and_atomic_rollback(engine):
     store = CanvasStore(engine)
     document = validate_document(doc())
