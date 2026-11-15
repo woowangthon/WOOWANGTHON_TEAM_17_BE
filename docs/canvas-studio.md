@@ -20,7 +20,7 @@ Canvas documents and idempotency leases are in `trip_canvas_documents` and `trip
 
 PUT requires `{expectedRevision, expectedSourcePlan, document}`. `expectedSourcePlan` is exactly `{planId, versionId}` or null, captured from the acknowledged canvas. A different source or stale revision returns `409 VERSION_CONFLICT` without a write; a missing source field is a 400 validation error requiring an updated FE bundle. Every successful PUT increments the revision once. The source fence is part of the body fingerprint. A completed same-key/body retry replays its stored response; a reused key with a different body returns `409 IDEMPOTENCY_KEY_REUSED`. FE must ignore an old replay after it has observed a higher revision from a different source. Unfinished or expired request leases return `409 REQUEST_IN_PROGRESS`; recommendation work is not automatically charged again after an unknown outcome. The fence uses existing source columns and needs no migration.
 
-The recommendation provider sees the request prompt, selected day date, a small allowlist of common trip conditions, and at most 12 ranked, bounded public catalog candidates selected from the trip region. Personal preferences, review data, private evidence, comments, and member scores are not sent. Only the prompt fingerprint is stored. Provider rationale is neither persisted nor returned. Provider IDs must belong to the sent candidate pool or the route returns `502 AI_INVALID_RESPONSE`. Recommendations are limited to five requests per session per minute; a completed idempotent replay does not count again.
+The recommendation provider sees the original request prompt, selected day date, a small allowlist of common trip conditions, and at most 12 deterministically ranked, bounded public catalog candidates selected from the trip region. Ranking uses title, category, planning role, unique menu text, explicit overview/address facts, and available preference/vibe tags; nearby mentions do not establish that a place is inside a venue. Candidate reads use regional catalog projections and detail lookups only for those place IDs. Personal preferences, review data, private evidence, comments, and member scores are not sent. Only the prompt fingerprint is stored. Provider rationale is neither persisted nor returned. Provider IDs must belong to the sent candidate pool or the route returns `502 AI_INVALID_RESPONSE`. An explicit request with no factual catalog match returns `404 PLACE_NOT_FOUND` before the provider call; broad recommendation prompts may still use the regional pool. Recommendations are limited to five requests per session per minute; a completed idempotent replay does not count again.
 
 Place details are read from allowlisted columns in `places` and the sole matching `place_details` row. Ambiguous detail rows are omitted. Homepage links are exposed only for HTTP(S); descriptive text is returned as text data and must be rendered as text by clients. Unknown fees remain unknown.
 
@@ -33,6 +33,24 @@ The merged generation service already orchestrates full-itinerary selection, AI 
 Canvas travel-time reads reuse `app.state.generation_router` and the existing route-fact validation. An optional `mode` query selects `car`, `walk`, `transit`, or `charter`; when omitted, the shared trip transport remains in effect. The override is read-only and is never saved to trip conditions. To return the validated provider coordinates, clients opt in with `X-Canvas-Route-Geometry: 1`; absent or other header values preserve the exact legacy response shape. Opted-in responses add `geometry`, an array of at most 2,048 finite WGS84 `{latitude, longitude}` points. Geometry is exposed only when route facts are verified; unknown results return `geometry: []`. Provider geometry passes the existing route-fact validation and is copied into the bounded route cache. The configured Kakao router has car, walking, and public-transit adapters; provider coverage or unavailable routes remain unknown. Charter is not supported by that router and returns an unknown result without a provider call. Conditions version and the underlying shared transport are still checked before and after lookup, even with an override. A condition-version mismatch, or a condition/coordinate change during the lookup, returns `409 STALE_ROUTE_INPUT`. Authorization is checked before and after work, including cache hits. External work holds no DB connection. A bounded short-lived cache, same-query merging, provider concurrency limit, and actor rate limit limit duplicate calls. Missing coordinates, unset/unsupported transport, and provider failures remain unknown; no straight-line time estimate is substituted. These facts do not approve a complete itinerary.
 
 ## Local checks
+
+### 한국어 조사에 따른 검색 결과 (2026-11-15)
+
+Kiwi가 원문의 명사와 조사를 나누고 백엔드가 방문 대상, 먹고 싶은 음식, 제외 대상과 위치를 구분한다. 캔버스에서는 공개 장소·메뉴 근거를 만족하는 후보 중 최대 12곳을 원문과 함께 Gemini에 보낸다. 일정 생성은 Gemini와 Qwen이 분석한 취향 항목의 대상어에 같은 조사 정규화를 적용한다.
+
+충북 공개 장소 1,857건을 읽기 전용으로 조회했다. 아래 숫자는 충북 전체에서 Gemini에 보낼 상위 12개 중 검색 대상의 카탈로그 근거가 확인된 후보 수다. 시장은 쇼핑 역할과 시장 근거, 공원은 활동 근거, 국수는 식사 역할과 음식 근거로 집계했다.
+
+| 요청 | 변경 전 (`2276e53`) | Kiwi 적용 후 |
+| --- | ---: | ---: |
+| 전통시장 가고 싶어 / 전통시장도 가고 싶어 | 8 / 0 | 12 / 12 |
+| 공원 가고 싶어 / 공원도 가고 싶어 | 8 / 2 | 12 / 12 |
+| 국수 먹고 싶어 / 국수도 먹고 싶어 | 7 / 0 | 12 / 12 |
+
+청주시로 좁혀도 세 쌍의 후보 ID와 순서가 각각 같았다. 시장은 11곳, 공원과 국수는 각각 12곳이었다. 충북 전체에서 라면(1곳), 초밥(3곳), 막국수(7곳), 박물관·숲길(각 12곳)도 조사 유무에 따라 같은 후보를 반환했다.
+
+실제 Gemini는 시장 두 표현 모두 단양구경시장을, 국수 요청에는 최피디해물칼국수 본점을 골랐다. `시장 말고 공원`은 시장 0곳과 공원 12곳을 반환했다. `시장에서 국수 먹고 싶어`는 시장 내부의 식당이라는 위치 근거와 국수 메뉴를 함께 확인할 수 있는 후보가 0곳이었다. 격리 카탈로그에 두 근거를 넣은 양성 사례와 전시장·시장 인근·과거 시장터 음성 사례를 따로 검사했다.
+
+청주 1일 일정에서는 실제 Gemini·Qwen이 전통시장과 국수를 추출했고, 일정 후보 선정과 배치까지 실행해 청주 중앙시장과 국수 메뉴가 있는 남들갈비가 포함된 결과를 확인했다. 두 항목의 ‘한 번’은 분석 응답에서 `ambiguous_quantity`로 남았고, 이 실행의 경로 검증 상태는 `unknown`이었다. 이 수치는 해당 카탈로그와 입력에 대한 검수 결과다.
 
 현재 전체 교체 후속: non-MySQL 207개 통과, MySQL 177개 제외. 3→2→3일과 날짜 전체 이동을 연속 검증하고, 이전 수동 장소·댓글·후보·사용자 날짜·배치가 새 결과에 남지 않는지 확인했다. 같은 버전 재시도와 삭제 보존, 실패/CAS rollback, source fence·fingerprint·옛 탭 거부, 일반 장소 교체 및 undo의 메타데이터 규칙도 통과했다. 실제 Gemini/Kakao 호출·공용 DB 쓰기나 서버 기동은 수행하지 않았다. 이전 아래 검증 기록 중 수동 카드 보존은 과거 append 정책이며 현재 규칙이 우선한다.
 

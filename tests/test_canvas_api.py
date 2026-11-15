@@ -32,14 +32,14 @@ def setup_app():
         c.execute(text("CREATE TABLE trip_preparation_documents(trip_id TEXT,conditions_json TEXT,conditions_version INTEGER)"))
         c.execute(text("CREATE TABLE trip_members(id TEXT,trip_id TEXT,nickname TEXT,role TEXT,status TEXT)"))
         c.execute(text("CREATE TABLE device_session_memberships(session_id TEXT,trip_id TEXT,member_id TEXT)"))
-        c.execute(text("CREATE TABLE places(contentid INTEGER,title TEXT,contentTypeName TEXT,planningRole TEXT,adminCity TEXT,addr1 TEXT,addr2 TEXT,mapx REAL,mapy REAL,geoValidated TEXT,tel TEXT,homepageUrl TEXT,overviewText TEXT,firstimage TEXT)"))
+        c.execute(text("CREATE TABLE places(contentid INTEGER,title TEXT,contentTypeName TEXT,planningRole TEXT,adminCity TEXT,addr1 TEXT,addr2 TEXT,mapx REAL,mapy REAL,geoValidated TEXT,tel TEXT,homepageUrl TEXT,overviewText TEXT,firstimage TEXT,recommendationUse TEXT)"))
         c.execute(text("CREATE TABLE place_details(contentid INTEGER,openingHoursText TEXT,closedDaysText TEXT,feeText TEXT,bookingText TEXT,parkingText TEXT,menuText TEXT,estimatedStayMinutes INTEGER)"))
         c.execute(text("CREATE TABLE trip_canvas_documents(trip_id TEXT PRIMARY KEY,revision INTEGER,schema_version INTEGER,document_json TEXT,source_plan_id TEXT,source_version_id TEXT,created_at DATETIME,updated_at DATETIME)"))
         c.execute(text("CREATE TABLE trip_canvas_requests(session_id TEXT,trip_id TEXT,member_id TEXT,kind TEXT,method TEXT,path TEXT,idempotency_key TEXT,fingerprint TEXT,status TEXT,lease_token TEXT,lease_expires_at DATETIME,result_json TEXT,created_at DATETIME,updated_at DATETIME,expires_at DATETIME,PRIMARY KEY(session_id,method,path,idempotency_key))"))
         c.execute(text("INSERT INTO trips VALUES(:t,'OPEN','trip','code')"), {"t": TRIP})
         c.execute(text("INSERT INTO trip_members VALUES(:m,:t,'Member','MEMBER','ACTIVE')"), {"m": MEMBER, "t": TRIP})
         c.execute(text("INSERT INTO device_session_memberships VALUES(:s,:t,:m)"), {"s": SESSION, "t": TRIP, "m": MEMBER})
-        c.execute(text("INSERT INTO places VALUES(101,'Place','Museum','activity','City','Addr',NULL,127.5,36.6,'yes','010','javascript:alert(1)','overview','https://example.test/place.jpg')"))
+        c.execute(text("INSERT INTO places VALUES(101,'Place','Museum','activity','City','Addr',NULL,127.5,36.6,'yes','010','javascript:alert(1)','overview','https://example.test/place.jpg',NULL)"))
         c.execute(text("INSERT INTO place_details VALUES(101,'Hours','Closed','Fee','Booking','Parking','Menu',75)"))
 
     def find_session(conn, request):
@@ -202,11 +202,12 @@ def test_successful_recommendation_same_key_replays_without_provider_call(setup_
     client.app.state.canvas_recommender = lambda prompt, pool: (calls.append(prompt) or {"contentid": pool[0]["contentid"], "alternatives": []})
     day = client.get(f"/api/v1/trips/{TRIP}/canvas").json()["document"]["days"][0]["id"]
     headers = {"Origin": "http://test", "Idempotency-Key": str(uuid.uuid4())}
-    body = {"prompt": "nearby museum", "dayId": day, "excludeContentids": []}
+    body = {"prompt": " nearby museum ", "dayId": day, "excludeContentids": []}
     first = client.post(f"/api/v1/trips/{TRIP}/canvas/recommendations", json=body, headers=headers)
-    replay = client.post(f"/api/v1/trips/{TRIP}/canvas/recommendations", json=body, headers=headers)
+    replay = client.post(f"/api/v1/trips/{TRIP}/canvas/recommendations", json={**body, "prompt": "nearby museum"}, headers=headers)
     assert first.status_code == 200 and replay.status_code == 200
     assert first.json() == replay.json() and len(calls) == 1
+    assert json.loads(calls[0])["prompt"] == "nearby museum"
     assert limiter.calls == 1
 
 
@@ -228,6 +229,131 @@ def test_catalog_recommendation_does_not_substitute_another_city(setup_app):
         conn.execute(text("UPDATE places SET adminCity='청주시',addr1='충청북도 청주시 테스트 주소'"))
     with engine.connect() as conn:
         assert _catalog_pool(conn, set(), region="충북 단양", prompt="Place") == []
+
+
+def test_catalog_shortlist_is_deterministic_and_never_exceeds_twelve(setup_app):
+    from app.canvas_api import _catalog_pool
+    _, engine = setup_app
+    with engine.begin() as conn:
+        for contentid in range(102, 122):
+            conn.execute(text("INSERT INTO places VALUES(:id,:title,'Museum','culture_stop','청주시','충청북도 청주시',NULL,127.5,36.6,'yes',NULL,NULL,NULL,NULL,NULL)"),
+                         {"id": contentid, "title": f"추천 장소 {contentid}"})
+    with engine.connect() as conn:
+        first = _catalog_pool(conn, set(), limit=40, prompt="추천해줘")
+        second = _catalog_pool(conn, set(), limit=40, prompt="추천해줘")
+    assert len(first) == 12
+    assert [p["contentid"] for p in first] == [p["contentid"] for p in second]
+    assert [p["contentid"] for p in first] == list(range(101, 113))
+
+
+def test_catalog_market_particle_forms_rank_identically(setup_app):
+    from app.canvas_api import _catalog_pool
+    _, engine = setup_app
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE places SET title='충주 자유시장',contentTypeName='시장',planningRole='shopping_stop',recommendationUse='GENERAL_SHOPPING',addr1='충청북도 충주시 자유시장길',overviewText='충주 전통시장'"))
+        conn.execute(text("INSERT INTO places VALUES(102,'카페 시장길','Cafe','meal_stop','충주시','충청북도 충주시 자유시장 인근',NULL,127.5,36.6,'yes',NULL,NULL,NULL,NULL,NULL)"))
+        conn.execute(text("INSERT INTO places VALUES(103,'충주 전시장','Museum','culture_stop','충주시','충청북도 충주시',NULL,127.5,36.6,'yes',NULL,NULL,NULL,NULL,NULL)"))
+    with engine.connect() as conn:
+        plain = _catalog_pool(conn, set(), region="충북 충주", prompt="전통시장 가고 싶어")
+        particle = _catalog_pool(conn, set(), region="충북 충주", prompt="전통시장도 가고 싶어")
+    assert [p["contentid"] for p in plain] == [101]
+    assert [p["contentid"] for p in particle] == [101]
+
+
+@pytest.mark.parametrize("prompt", ["시장만", "ㅋㅋㅋ", "!@#"])
+def test_no_match_returns_place_not_found_without_provider(setup_app, prompt):
+    calls = []
+    client, _ = setup_app
+    client.app.state.canvas_recommender = lambda *args: calls.append(args)
+    day = client.get(f"/api/v1/trips/{TRIP}/canvas").json()["document"]["days"][0]["id"]
+    response = client.post(f"/api/v1/trips/{TRIP}/canvas/recommendations",
+                           json={"prompt": prompt, "dayId": day, "excludeContentids": []},
+                           headers={"Origin": "http://test", "Idempotency-Key": str(uuid.uuid4())})
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "PLACE_NOT_FOUND"
+    assert calls == []
+
+
+def test_empty_catalog_is_retryable(setup_app):
+    client, engine = setup_app
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM places"))
+    day = client.get(f"/api/v1/trips/{TRIP}/canvas").json()["document"]["days"][0]["id"]
+    response = client.post(f"/api/v1/trips/{TRIP}/canvas/recommendations",
+                           json={"prompt": "시장도", "dayId": day, "excludeContentids": []},
+                           headers={"Origin": "http://test", "Idempotency-Key": str(uuid.uuid4())})
+    assert (response.status_code, response.json()["error"]["code"]) == (503, "CATALOG_UNAVAILABLE")
+
+
+def test_market_noodle_requires_meal_menu_and_in_market_evidence(setup_app):
+    from app.canvas_api import _catalog_pool
+    _, engine = setup_app
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE places SET title='구경시장 국수집',contentTypeName='한식',planningRole='meal_stop',addr1='단양 구경시장 안',overviewText='전통시장 내 음식점'"))
+        menu = "한우탕 / " * 50 + "잔치국수"
+        conn.execute(text("UPDATE place_details SET menuText=:menu WHERE contentid=101"), {"menu": menu})
+        conn.execute(text("INSERT INTO places VALUES(102,'시장 근처 국수집','한식','meal_stop','단양군','구경시장 인근',NULL,127.5,36.6,'yes',NULL,NULL,'인근 국수 맛집',NULL,NULL)"))
+        conn.execute(text("INSERT INTO place_details VALUES(102,NULL,NULL,NULL,NULL,NULL,'국수',NULL)"))
+        conn.execute(text("INSERT INTO places VALUES(103,'구경시장','Shopping','shopping_stop','단양군','단양 구경시장',NULL,127.5,36.6,'yes',NULL,NULL,NULL,NULL,'GENERAL_SHOPPING')"))
+    with engine.connect() as conn:
+        for prompt in ("전통시장에서 국수 먹고 싶어", "전통시장 안에서 국수도 먹고 싶어"):
+            pool = _catalog_pool(conn, set(), prompt=prompt)
+            assert [p["contentid"] for p in pool] == [101]
+            assert "국수" in pool[0]["menuText"] and len(pool[0]["menuText"]) <= 40
+
+
+@pytest.mark.parametrize("address,overview", [
+    ("충주시 가곡로", "1988년까지 전통시장이 있던 곳으로 알려졌다"),
+    ("충주시 전통시장 인근", "국수 전문점"),
+    ("충주시 시장로 20", "시장 이름을 딴 거리의 식당"),
+    ("충주시 전시장 내", "전시장 안에 있는 식당"),
+])
+def test_locative_search_rejects_historical_nearby_and_street_mentions(setup_app, address, overview):
+    from app.canvas_api import _catalog_pool
+    _, engine = setup_app
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE places SET title='참한우마을',contentTypeName='한식',planningRole='meal_stop',adminCity='충주시',addr1=:address,overviewText=:overview"),
+                     {"address": address, "overview": overview})
+        conn.execute(text("UPDATE place_details SET menuText='잔치국수' WHERE contentid=101"))
+    with engine.connect() as conn:
+        pool = _catalog_pool(conn, set(), prompt="시장에서 국수 먹고 싶어")
+    assert pool == []
+
+
+def test_locative_search_supports_other_venue_types(setup_app):
+    from app.canvas_api import _catalog_pool
+    _, engine = setup_app
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE places SET title='박물관 만두집',contentTypeName='한식',planningRole='meal_stop',adminCity='청주시',addr1='청주시 박물관 내',overviewText='만두 전문점'"))
+        conn.execute(text("UPDATE place_details SET menuText='왕만두' WHERE contentid=101"))
+    with engine.connect() as conn:
+        pool = _catalog_pool(conn, set(), prompt="박물관에서 만두 먹고 싶어")
+    assert [place["contentid"] for place in pool] == [101]
+
+
+@pytest.mark.parametrize("query", ["시장이나 공원 가고 싶어", "시장도 가고 공원도 가고 싶어"])
+def test_separate_visit_choices_are_both_represented(setup_app, query):
+    from app.canvas_api import _catalog_pool
+    _, engine = setup_app
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE places SET title='구경시장', planningRole='shopping_stop',recommendationUse='GENERAL_SHOPPING'"))
+        conn.execute(text("INSERT INTO places(contentid,title,planningRole) VALUES (102,'중앙공원','sightseeing_stop')"))
+    with engine.connect() as conn:
+        assert {p["contentid"] for p in _catalog_pool(conn, set(), prompt=query)} == {101, 102}
+
+
+def test_location_stays_with_its_own_meal_clause(setup_app):
+    from app.canvas_api import _catalog_pool
+    _, engine = setup_app
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE places SET title='국수집', planningRole='meal_stop',addr1='구경시장 내'"))
+        conn.execute(text("UPDATE place_details SET menuText='국수'"))
+        conn.execute(text("INSERT INTO places(contentid,title,planningRole,addr1) VALUES (102,'중앙공원','sightseeing_stop','청주시 중앙동'),(103,'국수집 2호점','meal_stop','청주시 중앙동')"))
+        conn.execute(text("INSERT INTO place_details(contentid,menuText) VALUES (103,'국수')"))
+    with engine.connect() as conn:
+        for query, ids in [("시장에서 국수를 먹고 공원에 가고 싶어", {101, 102}),
+                           ("시장에서는 국수를 먹지 않고 공원에 가고 싶어", {102})]:
+            assert {p["contentid"] for p in _catalog_pool(conn, set(), prompt=query)} == ids
 
 
 @pytest.mark.parametrize("invalid_id", ["unknown", "1.5", "1e3", "2147483648"])

@@ -77,7 +77,7 @@ def import_app(setup_app):
         conn.execute(text("CREATE TABLE plan_versions(id TEXT PRIMARY KEY,plan_id TEXT,trip_id TEXT,validation_result TEXT)"))
         conn.execute(text("INSERT INTO plan_versions VALUES(:v,:p,:t,:d)"),
                      {"v": VERSION, "p": PLAN, "t": TRIP, "d": json.dumps({"schema": "generation.v1", "document": generated_plan(), "sourceStamp": {"inputToken": "current"}})})
-        conn.execute(text("INSERT INTO places SELECT 102,'Second',contentTypeName,planningRole,adminCity,addr1,addr2,mapx,mapy,geoValidated,tel,homepageUrl,overviewText,firstimage FROM places WHERE contentid=101"))
+        conn.execute(text("INSERT INTO places SELECT 102,'Second',contentTypeName,planningRole,adminCity,addr1,addr2,mapx,mapy,geoValidated,tel,homepageUrl,overviewText,firstimage,recommendationUse FROM places WHERE contentid=101"))
     class FakeGenerationService:
         error = None
         version = VERSION

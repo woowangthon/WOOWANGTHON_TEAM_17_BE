@@ -15,8 +15,9 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
-from . import canvas_import, canvas_models, canvas_recommendation, preparation
+from . import canvas_import, canvas_models, canvas_recommendation, canvas_search, preparation
 from .candidate_selection import _tokens_region
+from .korean_text import analyze_search_intent
 from .canvas_models import CanvasValidationError
 from .canvas_store import CanvasStore, CanvasStoreError
 
@@ -227,22 +228,49 @@ def _catalog_pool(conn, exclude: set[int], limit=40, *, region=None, prompt=""):
             params[key] = f"%{city[:-1]}%"
             filters.append(f"(adminCity LIKE :{key} OR addr1 LIKE :{key})")
         region_sql = " AND (" + " OR ".join(filters) + ")"
-    rows = conn.execute(text("SELECT contentid,title,contentTypeName,planningRole,adminCity,addr1,overviewText,geoValidated,mapx,mapy FROM places WHERE contentid IS NOT NULL" + region_sql + " ORDER BY contentid"), params).mappings().all()
-    detail_rows = conn.execute(text("SELECT contentid,menuText FROM place_details")).mappings().all()
+    rows = conn.execute(text("""
+        SELECT contentid, title, contentTypeName, planningRole, recommendationUse, adminCity,
+               addr1, overviewText, geoValidated, mapx, mapy
+        FROM places WHERE contentid IS NOT NULL
+    """ + region_sql + " ORDER BY contentid"), params).mappings().all()
+    ids = [row["contentid"] for row in rows if type(row["contentid"]) is int and row["contentid"] not in exclude]
+    if not ids:
+        if not rows and conn.execute(text("SELECT 1 FROM places LIMIT 1")).first() is None:
+            raise CanvasError("CATALOG_UNAVAILABLE", 503)
+        return []
+
+    def by_ids(query):
+        statement = text(query + " WHERE contentid IN :ids").bindparams(bindparam("ids", expanding=True))
+        return conn.execute(statement, {"ids": ids}).mappings()
+
     menus: dict[int, list[str]] = {}
-    for row in detail_rows:
-        if isinstance(row["contentid"], int):
-            menus.setdefault(row["contentid"], []).append(row["menuText"] or "")
-    tokens = [t.lower() for t in re.findall(r"[\w가-힣]{2,}", prompt)[:40]]
+    for row in by_ids("SELECT contentid, menuText FROM place_details"):
+        menus.setdefault(row["contentid"], []).append(row["menuText"] or "")
+    tag_rows: dict[int, list[list[str]]] = {}
+    try:
+        for row in by_ids("SELECT contentid, preferenceTags, vibeTags FROM place_preferences"):
+            tags = [t.strip() for value in (row["preferenceTags"], row["vibeTags"])
+                    if isinstance(value, str) for t in value.split("|") if t.strip()]
+            tag_rows.setdefault(row["contentid"], []).append(tags)
+    except SQLAlchemyError as exc:
+        # Older catalogs can omit optional preference facts.
+        cause = getattr(exc, "orig", exc)
+        code = cause.args[0] if cause.args else None
+        if code not in (1054, 1146) and not any(s in str(cause).lower() for s in ("no such table", "no such column")):
+            raise
     pool = []
     for row in rows:
         cid = row["contentid"]
-        if isinstance(cid, bool) or not isinstance(cid, int) or cid in exclude or not _clean(row["title"]):
+        if type(cid) is not int or cid in exclude or not _clean(row["title"]):
             continue
-        candidate = {"contentid": cid, "title": _bounded(row["title"], 80), "category": _bounded(row["contentTypeName"], 30),
-                     "planningRole": _bounded(row["planningRole"], 30), "adminCity": _bounded(row["adminCity"], 40), "address": _bounded(row["addr1"], 80),
-                     "overviewText": _bounded(row["overviewText"], 80),
-                     "menuText": _bounded(menus[cid][0], 40) if len(menus.get(cid, [])) == 1 else None}
+        candidate = {
+            "contentid": cid, "title": _bounded(row["title"], 80), "category": _bounded(row["contentTypeName"], 30),
+            "planningRole": _bounded(row["planningRole"], 30), "recommendationUse": row["recommendationUse"],
+            "adminCity": _bounded(row["adminCity"], 40), "address": _bounded(row["addr1"], 80),
+            "overviewText": _clean(row["overviewText"]),
+            "menuText": _clean(menus[cid][0]) if len(menus.get(cid, ())) == 1 else None,
+            "tags": tag_rows[cid][0] if len(tag_rows.get(cid, ())) == 1 else [],
+        }
         try:
             if _truthy_geo(row["geoValidated"]):
                 lon, lat = float(row["mapx"]), float(row["mapy"])
@@ -250,11 +278,8 @@ def _catalog_pool(conn, exclude: set[int], limit=40, *, region=None, prompt=""):
                     candidate["coordinate"] = {"latitude": lat, "longitude": lon, "crs": "WGS84"}
         except (ValueError, TypeError, OverflowError):
             pass
-        searchable = " ".join(str(v).lower() for k, v in candidate.items() if k != "coordinate" and v is not None)
-        score = sum(1 for token in tokens if token in searchable)
-        pool.append((score, candidate))
-    pool.sort(key=lambda item: (-item[0], item[1]["contentid"]))
-    return [candidate for _, candidate in pool[:limit]]
+        pool.append(candidate)
+    return canvas_search.rank_candidates(pool, analyze_search_intent(prompt), limit)
 
 
 def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cookie_name: Callable,
@@ -566,13 +591,16 @@ def register_canvas_routes(app: FastAPI, engine, *, find_session: Callable, cook
                     if retry:
                         raise CanvasError("RATE_LIMITED", 429, retry)
                     current_conditions, _ = preparation._conditions(conn, trip_id)
-                    candidates = _catalog_pool(conn, set(excluded), 40, region=current_conditions.get("region"), prompt=prompt)
+                    try:
+                        candidates = _catalog_pool(conn, set(excluded), region=current_conditions.get("region"), prompt=prompt)
+                    except SQLAlchemyError:
+                        raise CanvasError("CATALOG_UNAVAILABLE", 503) from None
                     day_date = next((d["date"] for d in days if d["id"] == day_id), None)
                     public_context = {field: current_conditions.get(field) for field in ("region", "startDate", "endDate", "expectedPeople", "transport")}
                 # The provider call runs off the event loop, with no DB connection or transaction open.
                 conn.close()
                 if not candidates:
-                    raise CanvasError("CATALOG_UNAVAILABLE", 503)
+                    raise CanvasError("PLACE_NOT_FOUND", 404)
                 ai_prompt = json.dumps({"prompt": prompt.strip(), "dayDate": day_date,
                                         "commonTravelConditions": public_context}, ensure_ascii=False, separators=(",", ":"))
                 try:

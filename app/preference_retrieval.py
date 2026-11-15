@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .korean_text import normalize_target
+
 
 _ROLE_GROUPS = {
     "food": {"meal_stop"},
@@ -76,11 +78,11 @@ def _normalized_query(value: Any) -> str:
     stripped = _TRAILING.sub("", compact)
     # Keep phrase boundaries for component matching unless a known polite or
     # availability wrapper was removed.
-    if stripped == compact:
-        return cleaned
-    suffix = compact[len(stripped):]
-    suffix_pattern = r"\s*".join(re.escape(char) for char in suffix) + r"\s*$"
-    return re.sub(suffix_pattern, "", cleaned).strip()
+    if stripped != compact:
+        suffix = compact[len(stripped):]
+        suffix_pattern = r"\s*".join(re.escape(char) for char in suffix) + r"\s*$"
+        cleaned = re.sub(suffix_pattern, "", cleaned).strip()
+    return cleaned if _NEGATED_TARGET.search(value) else normalize_target(cleaned)
 
 
 def _valid_id(row: Any) -> bool:

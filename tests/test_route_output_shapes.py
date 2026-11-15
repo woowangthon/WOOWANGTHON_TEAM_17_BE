@@ -17,7 +17,7 @@ def test_visit_count_unit_target_maps_only_with_a_valid_count_period(unit):
                  scope="day", approximate=True,
                  frequency={"operator": "target", "count": 3, "period": "day"})
     compiled = _compile(atom)
-    assert compiled["policyVersion"] == "atomic-route-v2"
+    assert compiled["policyVersion"] == "atomic-route-v3"
     assert compiled["countRules"] == [{
         "memberRef": "p1", "dimension": "sightseeing", "tag": None, "scope": "day",
         "operator": "target", "count": 3, "required": False, "polarity": "prefer",

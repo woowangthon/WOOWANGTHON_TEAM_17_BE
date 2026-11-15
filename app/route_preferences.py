@@ -13,9 +13,10 @@ import re
 from typing import Any
 
 from .confirmed_preferences import ALIASES, NEGATIVE, _clauses, analyze_preferences
+from .korean_text import normalize_target
 from .preference_retrieval import PreferenceResolver
 
-POLICY_VERSION = "atomic-route-v2"
+POLICY_VERSION = "atomic-route-v3"
 _TOURISM = {"sightseeing_stop", "culture_stop", "activity_stop", "shopping_stop", "date_specific_event"}
 _LODGING = {"overnight_lodging", "overnight_camping"}
 _MARKET_DIMENSIONS = {"activity", "place", "venue", "category", "place_type", "visit_count", "other"}
@@ -37,9 +38,12 @@ def _compact_korean(value: Any) -> str:
 def _market_target(atom: dict[str, Any]) -> bool:
     if atom.get("dimension") not in _MARKET_DIMENSIONS:
         return False
-    target = _compact_korean(atom.get("target")).rstrip(".!?")
+    raw_target = atom.get("target")
+    if not isinstance(raw_target, str) or NEGATIVE.search(raw_target):
+        return False
+    target = _compact_korean(normalize_target(raw_target)).rstrip(".!?")
     return bool(re.fullmatch(
-        r"(?:전통시장|재래시장|시장|장터)(?:에|을|를|에서)?"
+        r"(?:전통시장|재래시장|시장|장터)(?:에|에서|을|를|도|만|에도)?"
         r"(?:방문|구경|가기|가고싶어요|가고싶어|가고싶다|방문하고싶어요|"
         r"방문하고싶어|방문하고싶다|구경하고싶어요|구경하고싶어|구경하고싶다)?",
         target))
@@ -135,6 +139,8 @@ def _atom_key(atom: dict[str, Any]) -> str:
 
 def _matcher(atom: dict[str, Any], vocabulary: set[str]) -> tuple[str, str | None] | None:
     dimension, target = atom.get("dimension"), atom.get("target")
+    if isinstance(target, str) and not NEGATIVE.search(target):
+        target = normalize_target(target)
     compact = "".join(target.split()) if isinstance(target, str) else ""
     if compact in {"\uacf3", "\uad70\ub370"}:
         return ("sightseeing", None) if dimension == "visit_count" and _frequency(atom) is not None else None
